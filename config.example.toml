@@ -1,0 +1,30 @@
+# Copy to config.toml (gitignored) and edit. Relative paths resolve against this file.
+
+[general]
+# Exactly one instance should drive a given bulb. false = log effects, don't send them.
+dispatch_enabled = true
+db_path = "game-lights.db"
+delay_s = 45             # seconds from detecting a score to firing the effect
+schedule_sync_hours = 6
+watch_lead_min = 10      # start watching this long before kickoff
+poll_live_s = 15         # minimum 10
+poll_break_s = 60        # halftime / breaks; minimum 10
+
+[[bulbs]]
+name = "living-room"
+ip = "192.168.0.13"
+mac = "cc4085e692f4"     # lets the app find the bulb again if its IP changes
+# signing_key = ""       # only if the bulb requires signed control
+
+[[teams]]
+league = "nfl"
+id = "9"                 # ESPN team id
+abbr = "GB"
+bulbs = ["living-room"]
+color = "#00FF00"        # overrides ESPN's dark green, which looks dull on a bulb
+alt_color = "#FFB612"
+
+[effects.score]
+pulses = 5               # pulse count x 2 color changes; capped at 2 changes/sec in code
+duration_s = 6.0
+brightness = 255
