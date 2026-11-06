@@ -1,0 +1,39 @@
+[project]
+name = "game-lights"
+version = "0.1.0"
+description = "Pulse a smart bulb in team colors when your teams score, timed to a delayed TV picture."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "pywizlight>=0.6.3",
+]
+
+[project.scripts]
+game-lights = "app.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
