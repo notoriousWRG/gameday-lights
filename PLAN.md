@@ -17,7 +17,7 @@ Each group ends with a review stop. Cards live in `cards/NN-<slug>.md`.
 
 - [x] **G10 Settings foundation** (no UI): C26 `app/settings.py` shared validation for settings sections (TOML seed and API use the same rules); C27 `app/store.py` schema v3: `settings` (section, revision, JSON) and `settings_history`; optimistic revisions; C28 `app/settings_service.py`: seed from `config.toml` on first start, assemble the current `Config` snapshot, `config export`/`import`; C29 live apply: Watcher, Dispatcher, planner and web read a `ConfigProvider` instead of a fixed `Config`; followed teams and the bulb registry reconcile when settings change; C30 settings API: `GET /api/settings`, `PUT /api/settings/{section}` (`If-Match`, `X-Gameday`, 422 with field errors, 409 stale), `GET /api/settings/history`
 - [x] **G11 Teams flow**: C31 `GET /api/teams/search?league=&q=` (ESPN team list, cached, colors included); C32 page nav and Teams screen: followed teams (remove, bulbs, colors), search and follow, save with field errors; following triggers a schedule sync, so the Schedule filter appears
-- [ ] **G12 Settings, Effects, Advanced screens**: delay, effect pattern with the Test button (the Pulse path), Advanced timings; later quiet hours, brightness cap, Hold
+- [x] **G12 Settings, Effects, Advanced screens**: C34 Settings screen (delay) and the shared `sectionEditor`; C35 Effects screen with the Test button (the Pulse path); C36 Advanced timings. Later: quiet hours, brightness cap, Hold (need new settings sections and dispatcher support, so they are their own group)
 - [ ] **G13 Bulbs screen**: discover, add by IP, name, signing key (write-only), ping and test
 
 ## Phase 1 gate

@@ -75,6 +75,14 @@
   th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; border-top: 0; }
   .err { color: var(--bad); margin-top: 6px; }
+  /* section editors (Settings, Effects, Advanced) */
+  .field { margin-bottom: 16px; max-width: 560px; }
+  .field > label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .numrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .numrow input[type="range"] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+  input[type="number"] { font: inherit; width: 96px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  input[type="number"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .help { font-size: 13px; margin-top: 4px; }
   /* scoreboard card */
   .sb-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; margin-bottom: 8px; }
   .sb-top h2 { margin: 0; }
@@ -128,6 +136,9 @@
   <nav class="tabs" aria-label="Sections">
     <a id="tab-status" href="#/status">Status</a>
     <a id="tab-teams" href="#/teams">Teams</a>
+    <a id="tab-effects" href="#/effects">Effects</a>
+    <a id="tab-settings" href="#/settings">Settings</a>
+    <a id="tab-advanced" href="#/advanced">Advanced</a>
   </nav>
   <div id="view-status">
   <div class="grid">
@@ -174,6 +185,40 @@
       </section>
     </div>
   </div>
+
+  <div id="view-effects" hidden>
+    <div id="effects-banner"></div>
+    <div class="stack">
+      <section class="card">
+        <h2>Score effect</h2>
+        <div id="effects-body"></div>
+        <div class="savebar" id="effects-savebar"></div>
+      </section>
+      <section class="card">
+        <h2>Try it</h2>
+        <div id="effects-test"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="view-settings" hidden>
+    <div id="settings-banner"></div>
+    <section class="card">
+      <h2>Broadcast delay</h2>
+      <div id="settings-body"></div>
+      <div class="savebar" id="settings-savebar"></div>
+    </section>
+    <p class="muted help"><a href="#/advanced">Advanced timings</a></p>
+  </div>
+
+  <div id="view-advanced" hidden>
+    <div id="advanced-banner"></div>
+    <section class="card">
+      <h2>Advanced timings</h2>
+      <div id="advanced-body"></div>
+      <div class="savebar" id="advanced-savebar"></div>
+    </section>
+  </div>
 </main>
 <script>
 // Everything from the server is inserted with textContent, never as HTML.
@@ -210,7 +255,7 @@ function renderBulbs() {
   }), "No bulbs configured.");
 }
 async function pulse(name) {
-  busy[name] = true; delete notes[name]; renderBulbs();
+  busy[name] = true; delete notes[name]; renderBulbs(); renderEffectTest();
   let note;
   try {
     const r = await fetch(`api/bulbs/${encodeURIComponent(name)}/pulse`, {method: "POST", headers: {"X-Gameday": "1"}});
@@ -218,8 +263,8 @@ async function pulse(name) {
     note = r.ok ? {text: body.dry_run ? "Dry-run: nothing was sent to the bulb." : `Pulse done (${body.duration_s}s).`, cls: "ok"}
                : {text: body.detail || `HTTP ${r.status}`, cls: "bad"};
   } catch (e) { note = {text: "Request failed: " + e.message, cls: "bad"}; }
-  busy[name] = false; notes[name] = note; renderBulbs();
-  setTimeout(() => { if (notes[name] === note) { delete notes[name]; renderBulbs(); } }, 8000);
+  busy[name] = false; notes[name] = note; renderBulbs(); renderEffectTest();
+  setTimeout(() => { if (notes[name] === note) { delete notes[name]; renderBulbs(); renderEffectTest(); } }, 8000);
 }
 
 // Schedule: every game for every followed team, one row per team's schedule (a game between two
@@ -646,16 +691,236 @@ async function saveTeams() {
 }
 $("team-league").addEventListener("change", (e) => { TM.league = e.target.value; runSearch(); });
 $("team-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 250); });
-window.addEventListener("beforeunload", (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => { if (dirty() || editors.some((x) => x.dirty())) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---- section editors (Settings, Effects, Advanced) ------------------------------------------
+// One draft per stored section, saved with PUT /api/settings/{section}. `fields` lists the keys the
+// screen shows; a 422 message about any other key goes in the banner. `draw(ed, body)` builds the inputs.
+const editors = [];
+function sectionEditor(o) {
+  const ed = {section: o.section, id: o.id, fields: o.fields, draw: o.draw, revision: 0, saved: null, draft: null,
+              machine: null, bulbs: [], errors: {}, banner: null, saving: false, loaded: false};
+  ed.dirty = () => ed.loaded && JSON.stringify(ed.draft) !== JSON.stringify(ed.saved);
+  editors.push(ed);
+  return ed;
+}
+async function edLoad(ed) {
+  try {
+    const s = await getJson("api/settings");
+    ed.revision = s.sections[ed.section].revision;
+    ed.saved = s.sections[ed.section].value; ed.draft = clone(ed.saved);
+    ed.machine = s.machine; ed.bulbs = s.sections.bulbs.value.map((b) => b.name);
+    ed.loaded = true; ed.errors = {}; ed.banner = null;
+  } catch (e) {
+    ed.banner = {cls: "bad", text: "Couldn't load these settings: " + e.message};
+  }
+  edDraw(ed);
+}
+function edShow(ed) {  // never throw away unsaved edits by navigating away and back
+  if (ed.dirty()) edDraw(ed); else edLoad(ed);
+}
+function edDraw(ed) {
+  const box = $(ed.id + "-banner");
+  if (!ed.banner) box.replaceChildren();
+  else {
+    const b = el("div", undefined, "banner " + ed.banner.cls);
+    b.setAttribute("role", ed.banner.cls === "bad" ? "alert" : "status");
+    b.append(el("span", ed.banner.text));
+    if (ed.banner.action) { const a = el("button", ed.banner.action.label); a.type = "button"; a.addEventListener("click", ed.banner.action.fn); b.append(a); }
+    box.replaceChildren(b);
+  }
+  const body = $(ed.id + "-body");
+  if (ed.loaded) ed.draw(ed, body); else body.replaceChildren(el("p", "Loading…", "empty"));
+  edSaveBar(ed);
+}
+function edSaveBar(ed) {
+  const changed = ed.dirty(), bar = $(ed.id + "-savebar");
+  const save = el("button", ed.saving ? "Saving…" : "Save", "primary"); save.type = "button";
+  save.disabled = ed.saving || !changed; save.addEventListener("click", () => edSave(ed));
+  const discard = el("button", "Discard changes"); discard.type = "button";
+  discard.disabled = ed.saving || !changed;
+  discard.addEventListener("click", () => { ed.draft = clone(ed.saved); ed.errors = {}; ed.banner = null; edDraw(ed); });
+  bar.replaceChildren(el("span", changed ? "Unsaved changes" : (ed.loaded ? "All changes saved" : ""), "grow " + (changed ? "warn" : "muted")), discard, save);
+  if (ed.after) ed.after(ed);
+}
+async function edSave(ed) {
+  ed.saving = true; ed.banner = null; ed.errors = {}; edDraw(ed);
+  try {
+    const r = await fetch(`api/settings/${ed.section}`, {method: "PUT", headers: {"X-Gameday": "1", "If-Match": String(ed.revision), "Content-Type": "application/json"}, body: JSON.stringify({value: ed.draft})});
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) {
+      ed.revision = body.revision; ed.saved = body.value; ed.draft = clone(body.value);
+      ed.banner = {cls: "ok", text: "Saved. It applies to the next score; nothing needs a restart."};
+      refresh();
+    } else if (r.status === 422) {
+      const loose = [];
+      (body.errors || []).forEach((e) => {
+        if (ed.fields.includes(e.path)) (ed.errors[e.path] = ed.errors[e.path] || []).push(e.message);
+        else loose.push(e.path ? `${e.path}: ${e.message}` : e.message);
+      });
+      ed.banner = {cls: "bad", text: loose.length ? loose.join("; ") : "Fix the marked fields before saving."};
+    } else if (r.status === 409) {
+      ed.banner = {cls: "bad", text: `These settings were changed somewhere else (now revision ${body.current_revision}). Your edits were not saved.`, action: {label: "Load latest", fn: () => edLoad(ed)}};
+    } else {
+      ed.banner = {cls: "bad", text: body.detail || `HTTP ${r.status}`};
+    }
+  } catch (e) {
+    ed.banner = {cls: "bad", text: "Request failed: " + e.message};
+  }
+  ed.saving = false; edDraw(ed);
+}
+// A number field (optionally with a slider) bound to ed.draft[key]. Editing it clears its own error.
+// Options: label, unit, min, max, step, slider, help; `obj` (default the draft) holds the value under
+// `key`; `err` is the server's error path for it (default `key`); `view` = {to, from} converts the
+// stored number to what is shown (brightness 1..255 shown as a percent).
+function numField(ed, key, o) {
+  const obj = o.obj || ed.draft, ek = o.err || key, view = o.view || {to: (v) => v, from: (v) => v};
+  const wrap = el("div", undefined, "field"), id = `f-${ed.section}-${ek}`;
+  const lab = el("label", o.label); lab.htmlFor = id;
+  const input = document.createElement("input");
+  input.type = "number"; input.id = id; input.step = o.step || 1;
+  if (o.min !== undefined) input.min = o.min;
+  if (o.max !== undefined && !o.slider) input.max = o.max;
+  const shown = obj[key] === null || obj[key] === undefined ? "" : view.to(obj[key]);
+  input.value = shown;
+  const row = el("div", undefined, "numrow");
+  row.append(input, el("span", o.unit || "", "muted"));
+  let range = null;
+  const changed = (v) => {
+    obj[key] = v; delete ed.errors[ek];
+    wrap.querySelectorAll(".err").forEach((e) => e.remove());
+    if (ed.banner && ed.banner.cls === "bad" && !ed.banner.action && !Object.keys(ed.errors).length) { ed.banner = null; $(ed.id + "-banner").replaceChildren(); }
+    edSaveBar(ed);
+  };
+  input.addEventListener("input", () => {
+    changed(input.value === "" ? null : view.from(Number(input.value)));
+    if (range && input.value !== "") range.value = input.value;
+  });
+  if (o.slider) {
+    range = document.createElement("input");
+    range.type = "range"; range.min = o.min; range.max = o.max; range.step = o.step || 1;
+    range.value = shown === "" ? o.min : shown; range.setAttribute("aria-label", o.label);
+    range.addEventListener("input", () => { input.value = range.value; changed(view.from(Number(range.value))); });
+    row.append(range);
+  }
+  wrap.append(lab, row);
+  if (o.help) wrap.append(el("div", o.help, "muted help"));
+  (ed.errors[ek] || []).forEach((m) => wrap.append(el("div", m, "err")));
+  return wrap;
+}
+
+const SETTINGS = sectionEditor({section: "household", id: "settings", fields: ["delay_s"], draw(ed, body) {
+  body.replaceChildren(numField(ed, "delay_s", {
+    label: "Delay after a score", unit: "seconds", min: 0, max: 180, slider: true,
+    help: "How long to wait after ESPN reports a score before the lights fire. Streaming runs behind live TV, so a longer delay keeps the room from spoiling the play. Applies to every game.",
+  }));
+}});
+
+// ---- Effects screen -----------------------------------------------------------------------
+// The score effect: pulses alternate two colors. Blank colors mean "use each team's colors"
+// (colors set on a team in Teams win over the ones here).
+const FLASH_CAP = 2;  // color changes per second; the server enforces it, this only warns early
+const EFFECT_KEYS = ["effects.score.pulses", "effects.score.duration_s", "effects.score.brightness",
+                     "effects.score.color", "effects.score.alt_color", "effects.score"];
+function effectColor(ed, s, key, label) {
+  const wrap = el("div", undefined, "field"), ek = "effects.score." + key;
+  wrap.append(el("label", label));
+  const row = el("div", undefined, "numrow"), input = document.createElement("input");
+  input.type = "color"; input.value = s[key] || "#ffffff"; input.setAttribute("aria-label", label);
+  const note = el("span", s[key] ? "custom" : "team colors", "muted");
+  input.addEventListener("input", () => { s[key] = input.value; note.textContent = "custom"; reset.hidden = false; effectPreview(s); edSaveBar(ed); });
+  const reset = el("button", "Use team colors"); reset.type = "button"; reset.hidden = !s[key];
+  reset.addEventListener("click", () => { s[key] = null; edDraw(ed); });
+  row.append(input, note, reset); wrap.append(row);
+  (ed.errors[ek] || []).forEach((m) => wrap.append(el("div", m, "err")));
+  return wrap;
+}
+function effectPreview(s) {
+  const box = $("effects-preview"); if (!box) return;
+  const n = Math.min(Math.max(Number(s.pulses) || 0, 0), 20) * 2, a = s.color || "#8a948e", b = s.alt_color || "#d5dbd7";
+  box.replaceChildren(...Array.from({length: n}, (_, i) => { const d = dot(i % 2 ? b : a); d.style.width = d.style.height = "16px"; d.style.opacity = String(Number(s.brightness) / 255 || 1); return d; }));
+  const rate = (Number(s.pulses) * 2) / Number(s.duration_s), line = $("effects-rate");
+  if (!isFinite(rate)) { line.textContent = ""; return; }
+  line.textContent = `${rate.toFixed(1)} color changes per second (limit ${FLASH_CAP})`;
+  line.className = "help " + (rate > FLASH_CAP ? "bad" : rate > FLASH_CAP * 0.8 ? "warn" : "muted");
+}
+function drawEffects(ed, body) {
+  const s = ed.draft.score;
+  const pct = {to: (v) => Math.round(v / 255 * 100), from: (v) => Math.round(v / 100 * 255)};
+  const preview = el("div", undefined, "field");
+  const strip = el("div"); strip.id = "effects-preview"; strip.style.display = "flex"; strip.style.flexWrap = "wrap"; strip.style.gap = "4px";
+  const rate = el("div"); rate.id = "effects-rate";
+  preview.append(el("label", "Preview"), strip, rate);
+  const redo = () => effectPreview(s);
+  const f = [
+    numField(ed, "pulses", {obj: s, err: "effects.score.pulses", label: "Pulses", min: 1, step: 1, help: "Each pulse is two color changes."}),
+    numField(ed, "duration_s", {obj: s, err: "effects.score.duration_s", label: "Duration", unit: "seconds", min: 0.1, step: 0.5}),
+    numField(ed, "brightness", {obj: s, err: "effects.score.brightness", label: "Brightness", unit: "%", min: 1, max: 100, slider: true, view: pct}),
+  ];
+  f.forEach((x) => x.addEventListener("input", redo));
+  body.replaceChildren(...f, effectColor(ed, s, "color", "Color"), effectColor(ed, s, "alt_color", "Alternate color"), preview);
+  (ed.errors["effects.score"] || []).forEach((m) => body.append(el("div", m, "err")));
+  redo();
+}
+const EFFECTS = sectionEditor({section: "effects", id: "effects", fields: EFFECT_KEYS, draw: drawEffects});
+
+// Test: plays the SAVED effect on one bulb through the same pulse endpoint and state as the Status page.
+let testBulb = "";
+function renderEffectTest() {
+  const box = $("effects-test"), ed = EFFECTS; if (!box) return;
+  if (!ed.loaded) { box.replaceChildren(); return; }
+  if (!ed.bulbs.length) { box.replaceChildren(el("p", "No bulbs configured.", "empty")); return; }
+  if (!ed.bulbs.includes(testBulb)) testBulb = ed.bulbs[0];
+  const sel = document.createElement("select"); sel.setAttribute("aria-label", "Bulb to test on");
+  sel.replaceChildren(...ed.bulbs.map((n) => { const o = el("option", n); o.value = n; o.selected = n === testBulb; return o; }));
+  sel.addEventListener("change", () => { testBulb = sel.value; renderEffectTest(); });
+  const dry = lastStatus && lastStatus.mode !== "live", unsaved = ed.dirty(), going = !!busy[testBulb];
+  const btn = el("button", going ? "Pulsing…" : (dry ? "Test (dry-run)" : "Test"), "primary"); btn.type = "button";
+  btn.disabled = going || unsaved; btn.addEventListener("click", () => pulse(testBulb));
+  const row = el("div", undefined, "numrow"); row.append(sel, btn);
+  const parts = [row];
+  if (unsaved) parts.push(el("div", "Save to test your changes: the test plays the saved effect.", "muted help"));
+  if (notes[testBulb]) parts.push(el("div", notes[testBulb].text, "help " + notes[testBulb].cls));
+  box.replaceChildren(...parts);
+}
+EFFECTS.after = renderEffectTest;
+
+// ---- Advanced screen ----------------------------------------------------------------------
+// Timings. The 10 s poll floor is enforced by the server too, so it holds even if this page is bypassed.
+const ADV_DEFAULTS = {poll_live_s: 15, poll_break_s: 60, schedule_sync_hours: 6, watch_lead_min: 10, pulse_cooldown_s: 10, final_hold_min: 30};
+const ADV_FIELDS = [
+  ["poll_live_s", {label: "Poll while a game is live", unit: "seconds", min: 10, help: "How often to ask ESPN during play. 10 seconds is the lowest allowed, to be kind to ESPN."}],
+  ["poll_break_s", {label: "Poll during breaks", unit: "seconds", min: 10, help: "Halftime, intermissions and the wait before kickoff. Also at least 10 seconds."}],
+  ["schedule_sync_hours", {label: "Refresh schedules every", unit: "hours", min: 0.1, step: 0.1, help: "How often to reload each followed team's upcoming games."}],
+  ["watch_lead_min", {label: "Start watching before kickoff", unit: "minutes", min: 0, help: "Polling begins this long before a game's start time."}],
+  ["pulse_cooldown_s", {label: "Pulse and Test cooldown", unit: "seconds", min: 1, help: "Wait between test pulses on the same bulb."}],
+  ["final_hold_min", {label: "Keep a finished game on the Scoreboard", unit: "minutes", min: 0, help: "How long the final score stays up before the next game replaces it."}],
+];
+function drawAdvanced(ed, body) {
+  const reset = el("button", "Reset to defaults"); reset.type = "button";
+  reset.addEventListener("click", () => { Object.assign(ed.draft, ADV_DEFAULTS); ed.errors = {}; ed.banner = null; edDraw(ed); });
+  const m = ed.machine, note = el("p", undefined, "muted help");
+  note.textContent = m ? `Set in config.toml, not here: dispatch_enabled (${m.dispatch_enabled ? "on" : "off"}) and the web address (${m.web.host}:${m.web.port}). Edit the file and restart to change them.` : "";
+  body.replaceChildren(...ADV_FIELDS.map(([key, o]) => numField(ed, key, o)), reset, note);
+}
+const ADVANCED = sectionEditor({section: "advanced", id: "advanced", fields: Object.keys(ADV_DEFAULTS), draw: drawAdvanced});
 
 // ---- navigation ---------------------------------------------------------------------------
+// One entry per screen; a screen's `show` runs whenever it is opened.
+const ROUTES = {
+  "#/status": {view: "view-status", tab: "tab-status"},
+  "#/teams": {view: "view-teams", tab: "tab-teams", show() { if (!(TM.loaded && dirty())) loadTeams(); else renderTeams(); }},
+  "#/effects": {view: "view-effects", tab: "tab-effects", show: () => edShow(EFFECTS)},
+  "#/settings": {view: "view-settings", tab: "tab-settings", show: () => edShow(SETTINGS)},
+  "#/advanced": {view: "view-advanced", tab: "tab-advanced", show: () => edShow(ADVANCED)},
+};
 function showView() {
-  const teams = location.hash === "#/teams";
-  $("view-status").hidden = teams; $("view-teams").hidden = !teams;
-  $("tab-status").setAttribute("aria-current", teams ? "false" : "page");
-  $("tab-teams").setAttribute("aria-current", teams ? "page" : "false");
-  if (teams && !(TM.loaded && dirty())) loadTeams();  // never throw away unsaved edits by navigating
-  else if (teams) renderTeams();
+  const route = ROUTES[location.hash] || ROUTES["#/status"];
+  Object.values(ROUTES).forEach((r) => {
+    $(r.view).hidden = r !== route;
+    $(r.tab).setAttribute("aria-current", r === route ? "page" : "false");
+  });
+  if (route.show) route.show();
 }
 window.addEventListener("hashchange", showView);
 

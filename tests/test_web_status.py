@@ -511,6 +511,37 @@ async def test_page_has_nav_and_the_teams_screen_wired_to_the_guarded_api():
     assert "innerHTML" not in html  # ESPN names and settings text only ever go in as text
 
 
+async def test_page_has_the_settings_screen_on_the_shared_section_editor():
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    for needle in ('id="tab-settings"', 'href="#/settings"', 'id="view-settings"', "const ROUTES",
+                   "sectionEditor", 'section: "household"', "delay_s", "api/settings/${ed.section}",
+                   '"If-Match"', '"X-Gameday"', "Load latest", "beforeunload"):
+        assert needle in html, needle
+    assert "innerHTML" not in html
+
+
+async def test_page_has_the_effects_screen_with_a_test_button_on_the_pulse_path():
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    for needle in ('id="tab-effects"', 'href="#/effects"', 'id="view-effects"',
+                   'section: "effects"', "effects.score.pulses", "FLASH_CAP", "Use team colors",
+                   "Save to test your changes", "pulse(testBulb)",
+                   "api/bulbs/${encodeURIComponent(name)}/pulse"):
+        assert needle in html, needle
+    assert "innerHTML" not in html
+
+
+async def test_page_has_the_advanced_screen_with_the_poll_floor_and_machine_note():
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    for needle in ('id="tab-advanced"', 'href="#/advanced"', 'id="view-advanced"',
+                   'section: "advanced"', "ADV_DEFAULTS", "poll_live_s", "min: 10",
+                   "Reset to defaults", "dispatch_enabled", 'href="#/advanced">Advanced timings'):
+        assert needle in html, needle
+    assert "innerHTML" not in html
+
+
 # --- next game for every followed team -------------------------------------------------------
 
 def teams_cfg(*teams):
