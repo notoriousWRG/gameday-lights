@@ -118,3 +118,25 @@ async def test_ping_reads_only_and_never_rediscovers():
     dead, lights = make(found=found)
     assert await dead.ping() is None
     assert dead.ip == "1.1.1.1" and len(lights) == 1  # no rediscovery from a ping
+
+
+async def test_discover_wiz_normalizes_dedupes_and_sorts():
+    from app.bulbs.wiz import discover_wiz
+
+    async def fake(**kw):
+        assert kw["broadcast_space"] == "255.255.255.255"
+        return [SimpleNamespace(ip="10.0.0.20", mac="CC:40:85:E6:92:F4"),
+                SimpleNamespace(ip="10.0.0.3", mac="aa:bb:cc:dd:ee:ff"),
+                SimpleNamespace(ip="10.0.0.21", mac="cc4085e692f4")]
+    found = await discover_wiz(discover=fake)
+    assert found == [{"ip": "10.0.0.3", "mac": "aabbccddeeff"},
+                     {"ip": "10.0.0.20", "mac": "cc4085e692f4"}]
+
+
+async def test_discover_wiz_turns_network_errors_into_bulb_unreachable():
+    from app.bulbs.wiz import discover_wiz
+
+    async def boom(**kw):
+        raise OSError("network is unreachable")
+    with pytest.raises(BulbUnreachable, match="network is unreachable"):
+        await discover_wiz(discover=boom)

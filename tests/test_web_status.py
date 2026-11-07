@@ -255,6 +255,69 @@ async def test_pulse_failure_is_502_still_restores_and_starts_cooldown():
         assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 429
 
 
+def make_team_test(bulb, colors=None, clock=None):
+    from app.dispatch.dispatcher import (
+        Dispatcher,
+        make_bulb_pulse,
+        make_planner,
+        make_team_pulse,
+    )
+
+    store = Store()
+    config = cfg()
+    colors = colors or {}
+    dispatcher = Dispatcher(store, {"lamp": bulb}, make_planner(config, colors, store))
+    kwargs = {"clock": clock} if clock else {}
+    return create_app(store, config, WatcherStats(started_at=NOW), {"lamp": bulb}, False,
+                      now=lambda: NOW, dispatcher=dispatcher,
+                      pulse_pattern=make_bulb_pulse(config, colors),
+                      team_pulse=make_team_pulse(config, colors), **kwargs)
+
+
+TEAM_BODY = {"league": "nfl", "id": "9", "bulbs": ["lamp"],
+             "color": "#00ff00", "alt_color": "#ffb612"}
+
+
+async def test_team_test_plays_the_edited_colors_on_the_bulbs_and_restores():
+    bulb = Recorder("lamp")
+    async with client(make_team_test(bulb)) as c:
+        r = await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)
+    assert r.status_code == 200 and r.json()["bulbs"] == ["lamp"]
+    colors = [x[1] for x in bulb.calls if x[0] == "set_color"]
+    assert colors[0] == (0, 255, 0) and colors[1] == (255, 182, 18) and len(colors) == 10
+    assert bulb.calls[0][0] == "snapshot" and bulb.calls[-1][0] == "restore"
+
+
+async def test_team_test_falls_back_to_espn_colors_when_the_team_has_none():
+    bulb = Recorder("lamp")
+    body = {"league": "nfl", "id": "9", "bulbs": ["lamp"], "color": None, "alt_color": None,
+            "espn_color": "#112233", "espn_alt_color": "#445566"}
+    async with client(make_team_test(bulb)) as c:
+        assert (await c.post("/api/teams/test", headers=HDR, json=body)).status_code == 200
+    colors = [x[1] for x in bulb.calls if x[0] == "set_color"]
+    assert colors[:2] == [(0x11, 0x22, 0x33), (0x44, 0x55, 0x66)]
+
+
+async def test_team_test_guards_and_bad_input():
+    async with client(make_team_test(Recorder("lamp"))) as c:
+        assert (await c.post("/api/teams/test", json=TEAM_BODY)).status_code == 403
+        assert (await c.post("/api/teams/test", headers=HDR, json={})).status_code == 400
+        for bad in ({"bulbs": []}, {"color": "green"}, {"bulbs": [3]}):
+            r = await c.post("/api/teams/test", headers=HDR, json={**TEAM_BODY, **bad})
+            assert r.status_code == 400, bad
+        r = await c.post("/api/teams/test", headers=HDR, json={**TEAM_BODY, "bulbs": ["nope"]})
+        assert r.status_code == 404
+
+
+async def test_team_test_shares_the_pulse_cooldown():
+    t = [100.0]
+    async with client(make_team_test(Recorder("lamp"), clock=lambda: t[0])) as c:
+        assert (await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)).status_code == 200
+        t[0] = 103
+        assert (await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)).status_code == 429
+        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 429
+
+
 async def test_no_pulse_endpoint_without_a_dispatcher():
     async with client(make()) as c:
         assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code in (404, 405)
@@ -506,7 +569,7 @@ async def test_page_has_nav_and_the_teams_screen_wired_to_the_guarded_api():
         html = (await c.get("/")).text
     for needle in ('id="tab-teams"', 'href="#/teams"', 'id="view-teams"', 'api/teams/search',
                    'api/settings/teams', '"If-Match"', '"X-Gameday"', "beforeunload",
-                   "clearErrors", "Load latest"):
+                   "clearErrors", "Load latest", "api/teams/test", "testTeam"):
         assert needle in html, needle
     assert "innerHTML" not in html  # ESPN names and settings text only ever go in as text
 
@@ -540,6 +603,18 @@ async def test_page_has_the_advanced_screen_with_the_poll_floor_and_machine_note
                    "Reset to defaults", "dispatch_enabled", 'href="#/advanced">Advanced timings'):
         assert needle in html, needle
     assert "innerHTML" not in html
+
+
+async def test_page_has_the_bulbs_screen_with_write_only_keys_and_discovery():
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    for needle in ('id="tab-bulbs"', 'href="#/bulbs"', 'id="view-bulbs"', 'section: "bulbs"',
+                   "api/bulbs/discover", "bulbPayload", 'type = "password"', "has_signing_key",
+                   "Find bulbs on the network", "Add by IP", "Remove key",
+                   "/rename", "Teams using it"):
+        assert needle in html, needle
+    assert "innerHTML" not in html
+    assert "config.toml for now" not in html
 
 
 # --- next game for every followed team -------------------------------------------------------

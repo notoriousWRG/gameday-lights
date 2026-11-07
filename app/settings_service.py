@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from app.config import Config
+from app.config import Config, ConfigError
 from app.dispatch.dispatcher import utc_now
 from app.settings import (
     SECRET,
@@ -138,6 +138,39 @@ class SettingsService:
         old, self._config = self.config, new_config
         self._notify(old, new_config)
         return revision, new_config
+
+    def rename_bulb(
+        self, old: str, new: str, bulbs_revision: int, teams_revision: int, source: str = "ui"
+    ) -> Config:
+        """Rename a bulb and every team reference to it in one step. Both sections are validated
+        together and both revisions checked before anything is written, so a refusal changes
+        nothing and teams never point at a name that no longer exists."""
+        stored = self.sections()
+        new = new.strip()
+        bulbs = copy.deepcopy(stored.get("bulbs", (0, []))[1])
+        teams = copy.deepcopy(stored.get("teams", (0, []))[1])
+        if not any(b.get("name") == old for b in bulbs):  # type: ignore[union-attr]
+            raise ConfigError(f"bulbs: unknown bulb {old!r}")
+        for b in bulbs:  # type: ignore[union-attr]
+            if b.get("name") == old:
+                b["name"] = new
+        for t in teams:  # type: ignore[union-attr]
+            t["bulbs"] = [new if n == old else n for n in t.get("bulbs", [])]
+        candidate = {name: val for name, (_, val) in stored.items()}
+        candidate.update(bulbs=bulbs, teams=teams)
+        new_config = build_config(self._machine, candidate, self._base_dir)
+        for section, expected in (("bulbs", bulbs_revision), ("teams", teams_revision)):
+            have = stored[section][0] if section in stored else 0
+            if have != expected:
+                raise RevisionConflict(section, have)
+        if old == new:
+            return self.config
+        normalized = sections_from_config(new_config)
+        self._write("bulbs", normalized["bulbs"], bulbs_revision, source)
+        self._write("teams", normalized["teams"], teams_revision, source)
+        old_config, self._config = self.config, new_config
+        self._notify(old_config, new_config)
+        return new_config
 
     @staticmethod
     def _merge_bulb_secrets(value: object, stored_bulbs: object) -> object:

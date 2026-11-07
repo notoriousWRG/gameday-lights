@@ -26,6 +26,26 @@ class BulbUnreachable(RuntimeError):
     pass
 
 
+async def discover_wiz(
+    broadcast: str = "255.255.255.255",
+    wait_time: float = 5,
+    discover: Callable[..., Awaitable[list]] = discover_lights,
+) -> list[dict]:
+    """WiZ bulbs answering a LAN broadcast: [{"ip", "mac"}], one per MAC, sorted by IP."""
+    try:
+        found = await discover(broadcast_space=broadcast, wait_time=wait_time)
+    except (OSError, WizLightError) as e:
+        raise BulbUnreachable(f"discovery failed: {e}") from e
+    by_mac: dict[str, dict] = {}
+    for b in found:
+        mac = (b.mac or "").lower().replace(":", "")
+        by_mac.setdefault(mac or b.ip, {"ip": b.ip, "mac": mac})
+    def ip_key(b: dict) -> tuple:
+        return tuple(int(p) if p.isdigit() else 0 for p in b["ip"].split("."))
+
+    return sorted(by_mac.values(), key=ip_key)
+
+
 @dataclass(frozen=True)
 class WizSnapshot:
     on: bool

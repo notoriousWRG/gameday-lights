@@ -322,3 +322,117 @@ async def test_search_routes_do_not_exist_without_an_espn_client():
     async with client(app) as c:
         assert (await c.get("/api/leagues")).status_code == 404
         assert (await c.get("/api/teams/search?league=nfl")).status_code == 404
+
+
+# --- bulb discovery -------------------------------------------------------------------------
+
+def make_discovering(found, fail=None, gate=None):
+    app, svc = make()
+    cfg = svc.config
+
+    async def discover():
+        if gate is not None:
+            await gate.wait()
+        if fail:
+            raise fail
+        return found
+
+    app = create_app(Store(), lambda: svc.config, WatcherStats(started_at=NOW), {}, False,
+                     now=lambda: NOW, settings=svc, discover_bulbs=discover)
+    return app, cfg
+
+
+async def test_discover_marks_known_bulbs_and_needs_the_header():
+    app, cfg = make_discovering([{"ip": "10.0.0.9", "mac": "cc4085e692f4"},
+                                 {"ip": "10.0.0.50", "mac": "aabbccddeeff"}])
+    async with client(app) as c:
+        assert (await c.post("/api/bulbs/discover")).status_code == 403
+        body = (await c.post("/api/bulbs/discover", headers=H)).json()
+    assert body == [
+        {"ip": "10.0.0.9", "mac": "cc4085e692f4", "known": True, "name": cfg.bulbs[0].name},
+        {"ip": "10.0.0.50", "mac": "aabbccddeeff", "known": False, "name": None},
+    ]
+    assert "signing" not in str(body)
+
+
+async def test_discover_failure_is_502_and_concurrent_search_is_409():
+    import asyncio
+
+    app, _ = make_discovering([], fail=OSError("no network"))
+    async with client(app) as c:
+        r = await c.post("/api/bulbs/discover", headers=H)
+    assert r.status_code == 502 and "no network" in r.json()["detail"]
+
+    gate = asyncio.Event()
+    app, _ = make_discovering([], gate=gate)
+    async with client(app) as c:
+        first = asyncio.ensure_future(c.post("/api/bulbs/discover", headers=H))
+        await asyncio.sleep(0.05)
+        assert (await c.post("/api/bulbs/discover", headers=H)).status_code == 409
+        gate.set()
+        assert (await first).status_code == 200
+
+
+async def test_no_discover_route_without_a_discover_function():
+    app, _ = make()
+    async with client(app) as c:
+        assert (await c.post("/api/bulbs/discover", headers=H)).status_code in (404, 405)
+
+
+# --- renaming a bulb ------------------------------------------------------------------------
+
+async def rename(c, old, to, bulbs_rev=1, teams_rev=1, headers=H):
+    return await c.post(f"/api/bulbs/{old}/rename", headers=headers,
+                        json={"to": to, "revisions": {"bulbs": bulbs_rev, "teams": teams_rev}})
+
+
+async def test_rename_updates_the_bulb_and_every_team_that_uses_it_and_applies_live():
+    app, svc = make()
+    old = svc.config.bulbs[0].name
+    async with client(app) as c:
+        r = await rename(c, old, "  Den lamp  ")
+        assert r.status_code == 200
+        secs = r.json()["sections"]
+    assert [b["name"] for b in secs["bulbs"]["value"]] == ["Den lamp"]
+    assert all(t["bulbs"] == ["Den lamp"] for t in secs["teams"]["value"])
+    assert secs["bulbs"]["revision"] == 2 and secs["teams"]["revision"] == 2
+    assert svc.config.bulbs[0].name == "Den lamp"
+    assert svc.config.teams[0].bulbs == ("Den lamp",)
+
+
+async def test_rename_keeps_the_signing_key():
+    app, svc = make()
+    old = svc.config.bulbs[0].name
+    async with client(app) as c:
+        cur = await current(c, "bulbs")
+        keyed = [{**cur["value"][0], "signing_key": "k"}]
+        assert (await put(c, "bulbs", keyed, cur["revision"])).status_code == 200
+        r = await rename(c, old, "den", bulbs_rev=2)
+    assert r.status_code == 200
+    assert svc.config.bulbs[0].signing_key == "k"
+
+
+async def test_rename_refusals_change_nothing():
+    app, svc = make()
+    old = svc.config.bulbs[0].name
+    async with client(app) as c:
+        assert (await rename(c, old, "x", headers={})).status_code == 403
+        assert (await rename(c, old, "")).status_code == 422
+        assert (await rename(c, "nope", "x")).status_code == 422
+        stale = await rename(c, old, "x", teams_rev=9)
+        assert stale.status_code == 409 and stale.json()["current_revision"] == 1
+        bad = await c.post(f"/api/bulbs/{old}/rename", headers=H, json={"to": "x"})
+        assert bad.status_code == 400
+        secs = (await c.get("/api/settings")).json()["sections"]
+    assert secs["bulbs"]["revision"] == 1 and secs["teams"]["revision"] == 1
+    assert svc.config.bulbs[0].name == old
+
+
+async def test_rename_to_another_bulbs_name_is_refused():
+    app, svc = make()
+    async with client(app) as c:
+        cur = await current(c, "bulbs")
+        two = [*cur["value"], {"name": "den", "ip": "10.0.0.8", "mac": None, "port": 38899}]
+        assert (await put(c, "bulbs", two, cur["revision"])).status_code == 200
+        r = await rename(c, "den", svc.config.bulbs[0].name, bulbs_rev=2)
+    assert r.status_code == 422

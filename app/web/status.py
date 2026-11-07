@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from importlib import metadata
 from pathlib import Path
@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.bulbs.base import BulbAdapter, Pattern
 from app.config import Config, ConfigError
 from app.dispatch.dispatcher import Dispatcher, utc_now
+from app.effects import parse_color
 from app.espn.client import LEAGUES, EspnClient, EspnError
 from app.espn.schedule import parse_team_list
 from app.settings import SECTIONS, error_location
@@ -35,6 +36,15 @@ PING_TIMEOUT_S = 3.0
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def _color_or_none(value):
+    """"#rrggbb" -> a color, null or "" -> None; anything else is a ValueError (a 400)."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("color must be text")
+    return parse_color(value)
 
 
 def _resolve(value):
@@ -281,6 +291,8 @@ def create_app(
     clock: Callable[[], float] = time.monotonic,
     settings: SettingsService | None = None,
     espn: EspnClient | None = None,
+    discover_bulbs: Callable[[], Awaitable[list[dict]]] | None = None,
+    team_pulse: Callable[..., Pattern] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Gameday Lights status", docs_url=None, redoc_url=None, openapi_url=None)
     pings = BulbPings(bulbs)
@@ -297,12 +309,7 @@ def create_app(
 
     if dispatcher is not None and pulse_pattern is not None:
 
-        @app.post("/api/bulbs/{name}/pulse")
-        async def pulse(name: str, request: Request) -> dict:
-            # The one write action. A cross-site form post cannot set a custom header
-            # without a CORS preflight, which this app never answers.
-            if request.headers.get("x-gameday") != "1":
-                raise HTTPException(403, "missing X-Gameday header")
+        def ready(name: str) -> None:
             if name not in _resolve(bulbs):
                 raise HTTPException(404, f"unknown bulb {name!r}")
             if name in pulsing:
@@ -311,24 +318,72 @@ def create_app(
             wait = cooldown - (clock() - last_pulse.get(name, float("-inf")))
             if wait > 0:
                 raise HTTPException(429, f"wait {wait:.0f}s before pulsing again")
+
+        async def play(name: str, pattern: Pattern) -> datetime:
             pulsing.add(name)
             try:
-                pattern = pulse_pattern(name)
-                started = await dispatcher.play_now(name, pattern)
+                return await dispatcher.play_now(name, pattern)
             except Exception as e:
                 log.warning("pulse check on %s failed: %r", name, e)
                 raise HTTPException(502, f"bulb error: {e}") from None
             finally:
                 pulsing.discard(name)
                 last_pulse[name] = clock()
+
+        @app.post("/api/bulbs/{name}/pulse")
+        async def pulse(name: str, request: Request) -> dict:
+            # The one write action. A cross-site form post cannot set a custom header
+            # without a CORS preflight, which this app never answers.
+            if request.headers.get("x-gameday") != "1":
+                raise HTTPException(403, "missing X-Gameday header")
+            ready(name)
+            pattern = pulse_pattern(name)
+            started = await play(name, pattern)
             log.info("pulse check on %s (%.1fs)", name, pattern.duration_s)
             return {"ok": True, "dry_run": dry_run, "duration_s": pattern.duration_s,
                     "started_at": _iso(started)}
+
+        if team_pulse is not None:
+
+            @app.post("/api/teams/test")
+            async def test_team(request: Request) -> dict:
+                """Play a team's score effect, with the colors as edited (saved or not), on the
+                bulbs given. Same guards, queue and snapshot/restore as the pulse check."""
+                if request.headers.get("x-gameday") != "1":
+                    raise HTTPException(403, "missing X-Gameday header")
+                try:
+                    body = await request.json()
+                    league, team_id = str(body["league"]), str(body["id"])
+                    names = body["bulbs"]
+                    if not isinstance(names, list) or not names or not all(
+                            isinstance(n, str) for n in names):
+                        raise ValueError
+                    color = _color_or_none(body.get("color"))
+                    alt = _color_or_none(body.get("alt_color"))
+                    espn = None
+                    if body.get("espn_color") and body.get("espn_alt_color"):
+                        espn = (parse_color(body["espn_color"]),
+                                parse_color(body["espn_alt_color"]))
+                except (ValueError, KeyError, TypeError):
+                    raise HTTPException(
+                        400, 'body must be {"league", "id", "bulbs": [names], optional colors as '
+                             '"#rrggbb"}') from None
+                names = list(dict.fromkeys(names))
+                for n in names:
+                    ready(n)
+                pattern = team_pulse(league, team_id, color, alt, espn)
+                started = await asyncio.gather(*(play(n, pattern) for n in names))
+                log.info("team test %s/%s on %s (%.1fs)", league, team_id, ", ".join(names),
+                         pattern.duration_s)
+                return {"ok": True, "dry_run": dry_run, "duration_s": pattern.duration_s,
+                        "bulbs": names, "started_at": _iso(min(started))}
 
     if settings is not None:
         _add_settings_routes(app, settings)
     if espn is not None:
         _add_team_routes(app, espn, cfg)
+    if discover_bulbs is not None:
+        _add_discover_route(app, discover_bulbs, cfg)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -390,6 +445,31 @@ def _add_settings_routes(app: FastAPI, settings: SettingsService) -> None:
     async def get_history(limit: int = 50, section: str | None = None) -> list[dict]:
         return settings.history(max(1, min(limit, 500)), section)
 
+    @app.post("/api/bulbs/{name}/rename")
+    async def rename_bulb(name: str, request: Request):
+        """Rename a bulb together with the teams that use it (they refer to it by name)."""
+        if request.headers.get("x-gameday") != "1":
+            raise HTTPException(403, "missing X-Gameday header")
+        try:
+            body = await request.json()
+            to, revs = body["to"], body["revisions"]
+            bulbs_rev, teams_rev = int(revs["bulbs"]), int(revs["teams"])
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(
+                400, 'body must be {"to": name, "revisions": {"bulbs": n, "teams": n}}'
+            ) from None
+        if not isinstance(to, str):
+            raise HTTPException(400, '"to" must be text')
+        try:
+            settings.rename_bulb(name, to, bulbs_rev, teams_rev, source="ui")
+        except ConfigError as e:
+            return JSONResponse({"errors": [_error_item(str(e))]}, status_code=422)
+        except RevisionConflict as e:
+            return JSONResponse({"detail": str(e), "current_revision": e.current_revision},
+                                status_code=409)
+        log.info("settings: bulb %r renamed to %r", name, to.strip())
+        return {"ok": True, "sections": settings.public_sections()}
+
     @app.put("/api/settings/{section}")
     async def put_settings(section: str, request: Request):
         if request.headers.get("x-gameday") != "1":
@@ -441,6 +521,38 @@ def _add_team_routes(app: FastAPI, espn, cfg) -> None:
             if all(w in f"{t['name']} {t['abbr']}".lower() for w in words)
         ]
         return found[:50]
+
+
+def _add_discover_route(app: FastAPI, discover_bulbs, cfg) -> None:
+    """Find bulbs on the LAN (a ~5 s broadcast). Read-only: nothing is saved, no keys are shown."""
+    running = False
+
+    @app.post("/api/bulbs/discover")
+    async def discover(request: Request) -> list[dict]:
+        nonlocal running
+        if request.headers.get("x-gameday") != "1":
+            raise HTTPException(403, "missing X-Gameday header")
+        if running:
+            raise HTTPException(409, "already searching")
+        running = True
+        try:
+            found = await discover_bulbs()
+        except Exception as e:
+            log.warning("bulb discovery failed: %r", e)
+            raise HTTPException(502, f"discovery failed: {e}") from None
+        finally:
+            running = False
+        stored = _resolve(cfg).bulbs
+        out = []
+        for b in found:
+            def norm(m):
+                return (m or "").lower().replace(":", "")
+
+            match = next((s for s in stored if (s.mac and norm(s.mac) == b["mac"])
+                          or (not s.mac and s.ip == b["ip"])), None)
+            out.append({"ip": b["ip"], "mac": b["mac"], "known": match is not None,
+                        "name": match.name if match else None})
+        return out
 
 
 async def serve_status(app: FastAPI, host: str, port: int) -> None:

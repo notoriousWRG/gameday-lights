@@ -41,11 +41,15 @@ tests/                   pytest; fixtures under tests/fixtures/ (recorded ESPN J
 
 ## Teams screen
 
-The page has a nav (Status, Teams; hash routes). The Teams screen works on a draft of the `teams` section and saves it with `PUT /api/settings/teams` (`If-Match`, `X-Gameday`): 422 messages are shown under the team row they belong to and clear when that team is edited; 409 offers "Load latest". `GET /api/leagues` and `GET /api/teams/search` (ESPN's cached team list with colors, `followed` marked per league) feed the search. The page file is read once when the server starts, so the page always matches the running API.
+The page has a nav (Status, Teams; hash routes). The Teams screen works on a draft of the `teams` section and saves it with `PUT /api/settings/teams` (`If-Match`, `X-Gameday`): 422 messages are shown under the team row they belong to and clear when that team is edited; 409 offers "Load latest". Each followed team has a **Test** button: `POST /api/teams/test` (`X-Gameday`) plays that team's score effect on the chosen bulbs with the colors as currently edited, saved or not (precedence is the real one: team colors, then the effect's, then ESPN's, which the page sends along as a fallback), through the same per-bulb queue, snapshot/restore and cooldown as the Pulse check; nothing is recorded as an event. `GET /api/leagues` and `GET /api/teams/search` (ESPN's cached team list with colors, `followed` marked per league) feed the search. The page file is read once when the server starts, so the page always matches the running API.
 
 ## Settings, Effects and Advanced screens
 
 Nav routes live in one `ROUTES` table in `status.html`. `sectionEditor` is the shared draft/Save/Discard machinery for a stored section (`PUT /api/settings/{section}` with `If-Match` and `X-Gameday`; 422 messages sit under the field named by `error_location`, anything else goes in the banner; 409 offers "Load latest"; unsaved drafts survive navigating away). Settings edits `household.delay_s`, Effects edits `effects.score` (the Test button uses the Pulse endpoint, so it plays the *saved* effect and is disabled while the draft is unsaved), Advanced edits the timings and shows the machine settings read-only. The 10 s poll floor is enforced by the server, not just by the inputs.
+
+## Bulbs screen
+
+`#/bulbs` edits the `bulbs` section through `sectionEditor`. `discover_wiz` (in the WiZ adapter, so the web layer never touches pywizlight) backs `POST /api/bulbs/discover` (`X-Gameday`, one search at a time, marks bulbs already stored by MAC); discovery saves nothing. Names are keys that teams refer to, so a name is typed freely only on a new bulb; a saved bulb is renamed with its Rename button, which calls `POST /api/bulbs/{name}/rename` (`SettingsService.rename_bulb`: renames the bulb and every team reference, validates both sections and checks both revisions before writing, so a refusal changes nothing). A bulb used by a followed team cannot be removed. Signing keys are write-only: the page only learns `has_signing_key`, an untouched key is left out of the PUT (the server keeps it), a typed one replaces it, "Remove key" sends null. A saved bulb gets its adapter and queue at once; Ping & test is the Pulse endpoint.
 
 ## Status page
 

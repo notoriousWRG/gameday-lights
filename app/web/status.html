@@ -136,6 +136,7 @@
   <nav class="tabs" aria-label="Sections">
     <a id="tab-status" href="#/status">Status</a>
     <a id="tab-teams" href="#/teams">Teams</a>
+    <a id="tab-bulbs" href="#/bulbs">Bulbs</a>
     <a id="tab-effects" href="#/effects">Effects</a>
     <a id="tab-settings" href="#/settings">Settings</a>
     <a id="tab-advanced" href="#/advanced">Advanced</a>
@@ -182,6 +183,21 @@
           <input id="team-search" type="search" placeholder="Search by team name or abbreviation" aria-label="Search teams" autocomplete="off">
         </div>
         <div id="team-results" class="results" aria-live="polite"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="view-bulbs" hidden>
+    <div id="bulbs-banner"></div>
+    <div class="stack">
+      <section class="card">
+        <h2>Your bulbs</h2>
+        <div id="bulbs-body"></div>
+        <div class="savebar" id="bulbs-savebar"></div>
+      </section>
+      <section class="card">
+        <h2>Add a bulb</h2>
+        <div id="bulbs-add"></div>
       </section>
     </div>
   </div>
@@ -255,7 +271,7 @@ function renderBulbs() {
   }), "No bulbs configured.");
 }
 async function pulse(name) {
-  busy[name] = true; delete notes[name]; renderBulbs(); renderEffectTest();
+  busy[name] = true; delete notes[name]; renderBulbs(); renderEffectTest(); bulbsRefresh();
   let note;
   try {
     const r = await fetch(`api/bulbs/${encodeURIComponent(name)}/pulse`, {method: "POST", headers: {"X-Gameday": "1"}});
@@ -263,8 +279,8 @@ async function pulse(name) {
     note = r.ok ? {text: body.dry_run ? "Dry-run: nothing was sent to the bulb." : `Pulse done (${body.duration_s}s).`, cls: "ok"}
                : {text: body.detail || `HTTP ${r.status}`, cls: "bad"};
   } catch (e) { note = {text: "Request failed: " + e.message, cls: "bad"}; }
-  busy[name] = false; notes[name] = note; renderBulbs(); renderEffectTest();
-  setTimeout(() => { if (notes[name] === note) { delete notes[name]; renderBulbs(); renderEffectTest(); } }, 8000);
+  busy[name] = false; notes[name] = note; renderBulbs(); renderEffectTest(); bulbsRefresh();
+  setTimeout(() => { if (notes[name] === note) { delete notes[name]; renderBulbs(); renderEffectTest(); bulbsRefresh(); } }, 8000);
 }
 
 // Schedule: every game for every followed team, one row per team's schedule (a game between two
@@ -474,7 +490,7 @@ function render(s) {
   const ul = el("ul"); ul.append(...lines); box.replaceChildren(ul);
   if (w.last_error) box.append(el("div", "Last error: " + w.last_error, "err"));
 
-  lastStatus = s; renderBulbs();
+  lastStatus = s; renderBulbs(); bulbsRefresh();
   renderSchedule(s.schedule, s.teams);
   renderScoreboard(s.scoreboard);
 
@@ -575,6 +591,23 @@ function colorField(t, key, label, espn, i) {
   if (shown && luminance(shown) < 0.03) wrap.append(el("span", "very dark: will look dim or off on a bulb", "muted"));
   return wrap;
 }
+// Test: plays the team's score effect with the colors as they are in the draft, so you can try
+// a color before saving. Teams with no color of their own use ESPN's, as in a real game.
+const TT = {busy: {}, note: {}};
+async function testTeam(t) {
+  const k = keyOf(t), info = TM.info[k] || {};
+  TT.busy[k] = true; delete TT.note[k]; renderFollowed();
+  let note;
+  try {
+    const r = await fetch("api/teams/test", {method: "POST", headers: {"X-Gameday": "1", "Content-Type": "application/json"},
+      body: JSON.stringify({league: t.league, id: t.id, bulbs: t.bulbs, color: t.color, alt_color: t.alt_color, espn_color: info.color || null, espn_alt_color: info.alt_color || null})});
+    const body = await r.json().catch(() => ({}));
+    note = r.ok ? {text: body.dry_run ? "Dry-run: nothing was sent to the bulb." : `Played on ${body.bulbs.join(", ")} (${body.duration_s}s).`, cls: "ok"}
+               : {text: body.detail || `HTTP ${r.status}`, cls: "bad"};
+  } catch (e) { note = {text: "Request failed: " + e.message, cls: "bad"}; }
+  TT.busy[k] = false; TT.note[k] = note; renderFollowed();
+  setTimeout(() => { if (TT.note[k] === note) { delete TT.note[k]; renderFollowed(); } }, 8000);
+}
 function followedRow(t, i) {
   const info = TM.info[keyOf(t)] || {}, row = el("div", undefined, "teamrow");
   const head = el("div", undefined, "teamhead");
@@ -584,8 +617,14 @@ function followedRow(t, i) {
   const rm = el("button", "Remove", "danger"); rm.type = "button";
   rm.setAttribute("aria-label", `Stop following ${t.abbr}`);
   rm.addEventListener("click", () => { TM.draft.splice(i, 1); TM.errors = {}; renderFollowed(); renderSaveBar(); renderResults(); });
-  head.append(rm);
+  const test = el("button", TT.busy[keyOf(t)] ? "Testing…" : (lastStatus && lastStatus.mode !== "live" ? "Test (dry-run)" : "Test"));
+  test.type = "button"; test.disabled = !!TT.busy[keyOf(t)] || !t.bulbs.length;
+  test.title = t.bulbs.length ? "Flash this team's colors on its bulbs (as edited, saved or not), then restore them" : "Pick a bulb first";
+  test.setAttribute("aria-label", `Test ${t.abbr} colors`);
+  test.addEventListener("click", () => testTeam(t));
+  head.append(test, rm);
   row.append(head);
+  if (TT.note[keyOf(t)]) row.append(el("div", TT.note[keyOf(t)].text, "help " + TT.note[keyOf(t)].cls));
 
   const fields = el("div", undefined, "fields"), bulbs = el("span", undefined, "bulbpick");
   bulbs.append(el("span", "Bulbs", "muted"));
@@ -646,7 +685,7 @@ function renderTeams() { renderBanner(); renderFollowed(); renderSaveBar(); rend
 
 function follow(t) {
   if (!TM.bulbs.length) {
-    TM.banner = {cls: "bad", text: "Add a bulb first: a followed team needs a bulb to light. (Bulbs are set in config.toml for now.)"};
+    TM.banner = {cls: "bad", text: "Add a bulb first: a followed team needs a bulb to light. Add one on the Bulbs screen."};
     renderBanner(); return;
   }
   TM.info[keyOf(t)] = t;
@@ -709,7 +748,7 @@ async function edLoad(ed) {
     const s = await getJson("api/settings");
     ed.revision = s.sections[ed.section].revision;
     ed.saved = s.sections[ed.section].value; ed.draft = clone(ed.saved);
-    ed.machine = s.machine; ed.bulbs = s.sections.bulbs.value.map((b) => b.name);
+    ed.machine = s.machine; ed.bulbs = s.sections.bulbs.value.map((b) => b.name); ed.teams = s.sections.teams.value; ed.teamsRevision = s.sections.teams.revision;
     ed.loaded = true; ed.errors = {}; ed.banner = null;
   } catch (e) {
     ed.banner = {cls: "bad", text: "Couldn't load these settings: " + e.message};
@@ -746,7 +785,7 @@ function edSaveBar(ed) {
 async function edSave(ed) {
   ed.saving = true; ed.banner = null; ed.errors = {}; edDraw(ed);
   try {
-    const r = await fetch(`api/settings/${ed.section}`, {method: "PUT", headers: {"X-Gameday": "1", "If-Match": String(ed.revision), "Content-Type": "application/json"}, body: JSON.stringify({value: ed.draft})});
+    const r = await fetch(`api/settings/${ed.section}`, {method: "PUT", headers: {"X-Gameday": "1", "If-Match": String(ed.revision), "Content-Type": "application/json"}, body: JSON.stringify({value: ed.payload ? ed.payload(ed.draft) : ed.draft})});
     const body = await r.json().catch(() => ({}));
     if (r.ok) {
       ed.revision = body.revision; ed.saved = body.value; ed.draft = clone(body.value);
@@ -755,7 +794,9 @@ async function edSave(ed) {
     } else if (r.status === 422) {
       const loose = [];
       (body.errors || []).forEach((e) => {
-        if (ed.fields.includes(e.path)) (ed.errors[e.path] = ed.errors[e.path] || []).push(e.message);
+        const m = ed.indexed && new RegExp(`^${ed.section}\\[(\\d+)\\]\\.?(.*)$`).exec(e.path);
+        if (m) (ed.errors["#" + m[1]] = ed.errors["#" + m[1]] || []).push(m[2] ? `${m[2]}: ${e.message}` : e.message);
+        else if (ed.fields.includes(e.path)) (ed.errors[e.path] = ed.errors[e.path] || []).push(e.message);
         else loose.push(e.path ? `${e.path}: ${e.message}` : e.message);
       });
       ed.banner = {cls: "bad", text: loose.length ? loose.join("; ") : "Fix the marked fields before saving."};
@@ -905,12 +946,169 @@ function drawAdvanced(ed, body) {
 }
 const ADVANCED = sectionEditor({section: "advanced", id: "advanced", fields: Object.keys(ADV_DEFAULTS), draw: drawAdvanced});
 
+// ---- Bulbs screen -------------------------------------------------------------------------
+// Rows come from the `bulbs` section (signing keys are never sent to the browser). A new key typed
+// here is held in b._key until Save; an untouched key is left out of the PUT so the server keeps it.
+const DEFAULT_PORT = 38899;
+const ADD = {name: "", ip: "", mac: "", port: ""};
+const BD = {busy: false, found: null, note: ""};
+const BR = {editing: null, error: "", busy: false};  // renaming a saved bulb
+function bulbPayload(draft) {
+  return draft.map((b) => {
+    const out = {name: b.name, ip: b.ip, mac: b.mac ? b.mac : null, port: b.port === "" || b.port === null ? DEFAULT_PORT : Number(b.port)};
+    if (b._clear) out.signing_key = null; else if (b._key) out.signing_key = b._key;
+    return out;
+  });
+}
+const freeBulbName = (ed) => { let n = ed.draft.length + 1; while (ed.draft.some((b) => b.name === "bulb-" + n)) n++; return "bulb-" + n; };
+function bulbText(ed, i, obj, key, label, o) {
+  const wrap = el("label", undefined, "colorfield"), input = document.createElement("input");
+  input.type = (o && o.type) || "text"; input.value = obj[key] === null || obj[key] === undefined ? "" : obj[key];
+  if (o && o.size) input.size = o.size;
+  if (o && o.auto) input.autocomplete = o.auto;
+  input.addEventListener("input", () => { obj[key] = input.value; delete ed.errors["#" + i]; wrap.parentElement && wrap.closest(".teamrow").querySelectorAll(".err").forEach((e) => e.remove()); edSaveBar(ed); });
+  wrap.append(el("span", label, "muted"), input);
+  return wrap;
+}
+// Renaming also renames the bulb inside every team that uses it, in one server step.
+function renameForm(ed, b) {
+  const wrap = el("span", undefined, "colorfield"), input = document.createElement("input");
+  input.type = "text"; input.className = "rename-in"; input.value = b.name; input.size = 16;
+  input.setAttribute("aria-label", `New name for ${b.name}`);
+  const ok = el("button", BR.busy ? "Renaming…" : "Rename", "primary"); ok.type = "button"; ok.disabled = BR.busy;
+  const cancel = el("button", "Cancel"); cancel.type = "button"; cancel.disabled = BR.busy;
+  const go = () => renameBulb(ed, b.name, input.value);
+  ok.addEventListener("click", go);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); else if (e.key === "Escape") cancel.click(); });
+  cancel.addEventListener("click", () => { BR.editing = null; BR.error = ""; edDraw(ed); });
+  wrap.append(input, ok, cancel);
+  if (BR.error) wrap.append(el("span", BR.error, "err"));
+  return wrap;
+}
+async function renameBulb(ed, from, to) {
+  if (!to.trim() || to.trim() === from) { BR.editing = null; BR.error = ""; edDraw(ed); return; }
+  BR.busy = true; BR.error = ""; edDraw(ed);
+  try {
+    const r = await fetch(`api/bulbs/${encodeURIComponent(from)}/rename`, {method: "POST", headers: {"X-Gameday": "1", "Content-Type": "application/json"}, body: JSON.stringify({to, revisions: {bulbs: ed.revision, teams: ed.teamsRevision}})});
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) {
+      BR.editing = null; BR.busy = false;
+      await edLoad(ed); ed.banner = {cls: "ok", text: `Renamed to ${to.trim()}. Teams using it were updated too.`}; edDraw(ed);
+      refresh(); return;
+    }
+    BR.error = r.status === 422 ? (body.errors || []).map((e) => e.message).join("; ")
+             : r.status === 409 ? "Bulbs or teams changed somewhere else. Cancel and reload." : (body.detail || `HTTP ${r.status}`);
+  } catch (e) { BR.error = "Request failed: " + e.message; }
+  BR.busy = false; edDraw(ed);
+  const i = $("bulbs-body").querySelector(".rename-in"); if (i) i.focus();
+}
+function bulbRow(ed, b, i) {
+  const row = el("div", undefined, "teamrow"), head = el("div", undefined, "teamhead");
+  const saved = !b._new, live = lastStatus && lastStatus.bulbs.find((x) => x.name === b.name);
+  if (saved && BR.editing === b.name) head.append(renameForm(ed, b));
+  else if (saved) {
+    head.append(el("strong", b.name));
+    const rn = el("button", "Rename", "rename-btn"); rn.type = "button"; rn.disabled = ed.dirty();
+    rn.title = ed.dirty() ? "Save or discard your other changes first" : "Give this bulb a different name";
+    rn.setAttribute("aria-label", `Rename ${b.name}`);
+    rn.addEventListener("click", () => { BR.editing = b.name; BR.error = ""; edDraw(ed); const i = $("bulbs-body").querySelector(".rename-in"); if (i) { i.focus(); i.select(); } });
+    head.append(rn);
+  } else head.append(bulbText(ed, i, b, "name", "Name", {size: 14}), el("span", "not saved yet", "pill warn"));
+  const reach = !saved || !live ? "" : (live.ping_ms === null ? "unreachable" : `${live.ping_ms} ms`);
+  head.append(el("span", reach, "grow " + (live && live.ping_ms === null ? "bad" : "ok")));
+  const test = el("button", busy[b.name] ? "Pulsing…" : "Ping & test"); test.type = "button";
+  test.disabled = !saved || !!busy[b.name]; test.title = saved ? "Flash this bulb with its team pattern, then restore it" : "Save the bulb first";
+  test.addEventListener("click", () => pulse(b.name));
+  const users = saved ? ed.teams.filter((t) => t.bulbs.includes(b.name)).map((t) => t.abbr) : [];
+  const rm = el("button", "Remove", "danger"); rm.type = "button"; rm.disabled = users.length > 0;
+  rm.title = users.length ? `Used by ${users.join(", ")}: change those teams first` : "";
+  rm.setAttribute("aria-label", `Remove ${b.name}`);
+  rm.addEventListener("click", () => { ed.draft.splice(i, 1); ed.errors = {}; edDraw(ed); });
+  head.append(test, rm); row.append(head);
+  const fields = el("div", undefined, "fields");
+  fields.append(bulbText(ed, i, b, "ip", "IP", {size: 14}), bulbText(ed, i, b, "mac", "MAC (optional)", {size: 14}), bulbText(ed, i, b, "port", "Port", {size: 6}));
+  const key = el("span", undefined, "colorfield");
+  key.append(el("span", "Signing key", "muted"));
+  const kin = document.createElement("input"); kin.type = "password"; kin.autocomplete = "new-password"; kin.size = 14;
+  kin.placeholder = b.has_signing_key && !b._clear ? "key set; type to replace" : "none";
+  kin.value = b._key || "";
+  kin.addEventListener("input", () => { b._key = kin.value; if (kin.value) b._clear = false; edSaveBar(ed); });
+  key.append(kin);
+  if (b.has_signing_key && !b._clear) {
+    const clr = el("button", "Remove key"); clr.type = "button";
+    clr.addEventListener("click", () => { b._clear = true; b._key = ""; edDraw(ed); });
+    key.append(clr);
+  } else if (b._clear) key.append(el("span", "key will be removed on Save", "warn"));
+  fields.append(key); row.append(fields);
+  (ed.errors["#" + i] || []).forEach((m) => row.append(el("div", m, "err")));
+  return row;
+}
+function addBulb(ed, b) {
+  ed.draft.push({name: b.name, ip: b.ip, mac: b.mac || null, port: b.port === "" ? DEFAULT_PORT : Number(b.port), has_signing_key: false, _new: true});
+  ed.errors = {}; ed.banner = null; edDraw(ed);
+}
+function drawBulbs(ed, body) {
+  body.replaceChildren(...(ed.draft.length ? ed.draft.map((b, i) => bulbRow(ed, b, i)) : [el("p", "No bulbs yet. Find or add one below.", "empty")]));
+  renderBulbAdd();
+}
+async function runDiscover() {
+  BD.busy = true; BD.note = ""; renderBulbAdd();
+  try {
+    const r = await fetch("api/bulbs/discover", {method: "POST", headers: {"X-Gameday": "1"}});
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) { BD.found = body; BD.note = body.length ? "" : "No bulbs answered. Check the bulb is on and on this network, or add it by IP."; }
+    else { BD.found = null; BD.note = body.detail || `HTTP ${r.status}`; }
+  } catch (e) { BD.found = null; BD.note = "Request failed: " + e.message; }
+  BD.busy = false; renderBulbAdd();
+}
+function renderBulbAdd() {
+  const box = $("bulbs-add"), ed = BULBS; if (!ed.loaded) { box.replaceChildren(); return; }
+  const find = el("button", BD.busy ? "Searching… (about 5 s)" : "Find bulbs on the network"); find.type = "button"; find.disabled = BD.busy;
+  find.addEventListener("click", runDiscover);
+  const parts = [find];
+  if (BD.note) parts.push(el("div", BD.note, "err"));
+  (BD.found || []).forEach((f) => {
+    const taken = f.known || ed.draft.some((b) => b.ip === f.ip || (b.mac && b.mac === f.mac));
+    const r = el("div", undefined, "result"), text = el("span", `${f.ip}  ·  ${f.mac}${f.name ? "  ·  " + f.name : ""}`, "grow");
+    const add = el("button", taken ? "Added" : "Add"); add.type = "button"; add.disabled = taken;
+    add.addEventListener("click", () => addBulb(ed, {name: freeBulbName(ed), ip: f.ip, mac: f.mac, port: ""}));
+    r.append(text, add); parts.push(r);
+  });
+  const form = el("div", undefined, "fields"); form.style.marginTop = "14px";
+  const inp = (key, label, size) => {
+    const w = el("label", undefined, "colorfield"), i = document.createElement("input");
+    i.type = "text"; i.size = size; i.value = ADD[key]; i.addEventListener("input", () => { ADD[key] = i.value; });
+    w.append(el("span", label, "muted"), i); return w;
+  };
+  const go = el("button", "Add by IP", "primary"); go.type = "button";
+  go.addEventListener("click", () => {
+    const miss = !ADD.name.trim() ? "a name" : !ADD.ip.trim() ? "an IP address" : "";
+    if (miss) { BD.note = `Add by IP needs ${miss}.`; renderBulbAdd(); return; }
+    addBulb(ed, {name: ADD.name.trim(), ip: ADD.ip.trim(), mac: ADD.mac.trim(), port: ADD.port.trim()});
+    ADD.name = ADD.ip = ADD.mac = ADD.port = ""; BD.note = ""; renderBulbAdd();
+  });
+  form.append(inp("name", "Name", 12), inp("ip", "IP", 14), inp("mac", "MAC (optional)", 14), inp("port", "Port", 6), go);
+  parts.push(form);
+  box.replaceChildren(...parts);
+}
+const BULBS = sectionEditor({section: "bulbs", id: "bulbs", fields: [], draw: drawBulbs});
+BULBS.indexed = true; BULBS.payload = bulbPayload;
+BULBS.after = () => document.querySelectorAll(".rename-btn").forEach((b) => { b.disabled = BULBS.dirty(); });
+function bulbsRefresh() {  // keep reachability and test results current without stealing focus from a field
+  if (location.hash !== "#/bulbs" || !BULBS.loaded || BULBS.saving) return;
+  const a = document.activeElement;
+  if (a && $("bulbs-body").contains(a) && a.tagName === "INPUT") return;
+  if (BR.editing) return;
+  drawBulbs(BULBS, $("bulbs-body"));
+}
+
 // ---- navigation ---------------------------------------------------------------------------
 // One entry per screen; a screen's `show` runs whenever it is opened.
 const ROUTES = {
   "#/status": {view: "view-status", tab: "tab-status"},
   "#/teams": {view: "view-teams", tab: "tab-teams", show() { if (!(TM.loaded && dirty())) loadTeams(); else renderTeams(); }},
   "#/effects": {view: "view-effects", tab: "tab-effects", show: () => edShow(EFFECTS)},
+  "#/bulbs": {view: "view-bulbs", tab: "tab-bulbs", show: () => edShow(BULBS)},
   "#/settings": {view: "view-settings", tab: "tab-settings", show: () => edShow(SETTINGS)},
   "#/advanced": {view: "view-advanced", tab: "tab-advanced", show: () => edShow(ADVANCED)},
 };

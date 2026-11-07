@@ -12,7 +12,7 @@ from collections.abc import Coroutine
 from datetime import datetime, timedelta
 
 from app.bulbs.base import BulbAdapter, DryRunBulb
-from app.bulbs.wiz import WizBulb
+from app.bulbs.wiz import WizBulb, discover_wiz
 from app.config import (
     BulbConfig,
     Config,
@@ -26,6 +26,7 @@ from app.dispatch.dispatcher import (
     Dispatcher,
     make_bulb_pulse,
     make_planner,
+    make_team_pulse,
     resolve_pattern,
     utc_now,
 )
@@ -183,7 +184,8 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
         if cfg.web.enabled:
             app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
                              dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
-                             settings=service, espn=client)
+                             settings=service, espn=client, discover_bulbs=discover_wiz,
+                             team_pulse=make_team_pulse(current, colors))
             tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
         await run_tasks(tasks)
     finally:

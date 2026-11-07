@@ -117,3 +117,13 @@ def test_final_hold_default_and_override(tmp_path):
     assert load_config(write(tmp_path, BASE)).web.final_hold_min == 30
     cfg = load_config(write(tmp_path, BASE + "[web]\nfinal_hold_min = 0\n"))
     assert cfg.web.final_hold_min == 0
+
+
+def test_bulb_name_and_ip_must_not_be_blank():
+    import pytest as _pytest
+
+    from app.config import ConfigError, parse_config
+
+    for bad in ({"name": "  ", "ip": "10.0.0.1"}, {"name": "lamp", "ip": ""}):
+        with _pytest.raises(ConfigError, match="must not be empty"):
+            parse_config({"general": {"dispatch_enabled": False}, "bulbs": [bad]}, ".")

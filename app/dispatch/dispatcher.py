@@ -83,6 +83,28 @@ def make_bulb_pulse(
     return pattern_for
 
 
+def make_team_pulse(
+    config: Config | Callable[[], Config],
+    team_colors: dict[tuple[str, str], tuple[Color, Color]],
+) -> Callable[..., Pattern]:
+    """(league, team id, color, alt_color, espn colors) -> the pattern that team's score would play,
+    for colors that may not be saved yet. Precedence is the real one: the team's own colors, then
+    the effect's, then ESPN's (the given ones, else those already loaded, else green and white)."""
+    current = _provider(config)
+
+    def pattern_for(
+        league: str, team_id: str, color: Color | None, alt_color: Color | None,
+        espn: tuple[Color, Color] | None = None,
+    ) -> Pattern:
+        primary, alternate = espn or team_colors.get(
+            (league, team_id), ((0, 255, 0), (255, 255, 255))
+        )
+        team = TeamConfig(league, team_id, "", (), color, alt_color)
+        return resolve_pattern(current(), team, primary, alternate)
+
+    return pattern_for
+
+
 class Dispatcher:
     def __init__(
         self,

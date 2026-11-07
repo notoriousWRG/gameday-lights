@@ -130,11 +130,16 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
     bulbs: list[BulbConfig] = []
     for i, b in enumerate(raw.get("bulbs", [])):
         where = f"bulbs[{i}]"
-        name = _str(b, "name", where)
+        name = (_str(b, "name", where) or "").strip()
+        if not name:
+            raise ConfigError(f"{where}.name: must not be empty")
+        ip = (_str(b, "ip", where) or "").strip()
+        if not ip:
+            raise ConfigError(f"{where}.ip: must not be empty")
         if any(x.name == name for x in bulbs):
             raise ConfigError(f"{where}.name: duplicate bulb {name!r}")
         bulbs.append(BulbConfig(
-            name=name, ip=_str(b, "ip", where), mac=_str(b, "mac", where, False),
+            name=name, ip=ip, mac=_str(b, "mac", where, False),
             port=int(b.get("port", 38899)), signing_key=_str(b, "signing_key", where, False),
         ))
 
