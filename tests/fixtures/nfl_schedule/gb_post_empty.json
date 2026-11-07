@@ -1,0 +1,32 @@
+{
+ "timestamp": "2026-11-06T19:05:55Z",
+ "status": "success",
+ "season": {
+  "year": 2026,
+  "type": 2,
+  "name": "Regular Season",
+  "displayName": "2026",
+  "half": 1
+ },
+ "team": {
+  "id": "9",
+  "abbreviation": "GB",
+  "location": "Green Bay",
+  "name": "Packers",
+  "displayName": "Green Bay Packers",
+  "clubhouse": "https://www.espn.com/nfl/team/_/name/gb/green-bay-packers",
+  "color": "204e32",
+  "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/gb.png",
+  "recordSummary": "5-3",
+  "seasonSummary": "2026",
+  "standingSummary": "4th in NFC North",
+  "groups": {
+   "id": "10",
+   "parent": {
+    "id": "7"
+   },
+   "isConference": false
+  }
+ },
+ "events": []
+}

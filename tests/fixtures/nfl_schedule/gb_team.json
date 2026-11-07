@@ -1,0 +1,126 @@
+{
+ "team": {
+  "abbreviation": "GB",
+  "alternateColor": "ffb612",
+  "color": "204e32",
+  "displayName": "Green Bay Packers",
+  "groups": {
+   "id": "7",
+   "isConference": true,
+   "parent": {
+    "id": "9"
+   }
+  },
+  "id": "9",
+  "isActive": true,
+  "location": "Green Bay",
+  "name": "Packers",
+  "nextEvent": [
+   {
+    "competitions": [
+     {
+      "attendance": 0,
+      "boxscoreAvailable": false,
+      "competitors": [
+       {
+        "curatedRank": {
+         "current": 99
+        },
+        "homeAway": "home",
+        "id": "17",
+        "order": 0,
+        "team": {
+         "abbreviation": "NE",
+         "displayName": "New England Patriots",
+         "id": "17",
+         "location": "New England",
+         "nickname": "Patriots",
+         "shortDisplayName": "Patriots"
+        },
+        "type": "team"
+       },
+       {
+        "curatedRank": {
+         "current": 99
+        },
+        "homeAway": "away",
+        "id": "9",
+        "order": 1,
+        "team": {
+         "abbreviation": "GB",
+         "displayName": "Green Bay Packers",
+         "id": "9",
+         "location": "Green Bay",
+         "nickname": "Packers",
+         "shortDisplayName": "Packers"
+        },
+        "type": "team"
+       }
+      ],
+      "date": "2026-11-08T21:25Z",
+      "id": "401873049",
+      "neutralSite": false,
+      "notes": [],
+      "status": {
+       "clock": 0.0,
+       "displayClock": "0:00",
+       "isTBDFlex": false,
+       "period": 0,
+       "type": {
+        "completed": false,
+        "description": "Scheduled",
+        "detail": "Sun, November 8th at 4:25 PM EST",
+        "id": "1",
+        "name": "STATUS_SCHEDULED",
+        "shortDetail": "11/8 - 4:25 PM EST",
+        "state": "pre"
+       }
+      },
+      "ticketsAvailable": true,
+      "timeValid": true,
+      "type": {
+       "abbreviation": "STD",
+       "id": "1",
+       "slug": "standard",
+       "text": "Standard",
+       "type": "standard"
+      },
+      "venue": {
+       "address": {
+        "city": "Foxborough",
+        "country": "USA",
+        "state": "MA",
+        "zipCode": "02035"
+       },
+       "fullName": "Gillette Stadium"
+      }
+     }
+    ],
+    "date": "2026-11-08T21:25Z",
+    "id": "401873049",
+    "name": "Green Bay Packers at New England Patriots",
+    "season": {
+     "displayName": "2026",
+     "year": 2026
+    },
+    "seasonType": {
+     "abbreviation": "reg",
+     "id": "2",
+     "name": "Regular Season",
+     "type": 2
+    },
+    "shortName": "GB @ NE",
+    "timeValid": true,
+    "week": {
+     "number": 9,
+     "text": "Week 9"
+    }
+   }
+  ],
+  "nickname": "Packers",
+  "shortDisplayName": "Packers",
+  "slug": "green-bay-packers",
+  "standingSummary": "7th in National Football Conference",
+  "uid": "s:20~l:28~t:9"
+ }
+}
