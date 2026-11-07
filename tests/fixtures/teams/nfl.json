@@ -1,0 +1,428 @@
+{
+ "sports": [
+  {
+   "leagues": [
+    {
+     "teams": [
+      {
+       "team": {
+        "abbreviation": "ARI",
+        "alternateColor": "ffffff",
+        "color": "a40227",
+        "displayName": "Arizona Cardinals",
+        "id": "22",
+        "isActive": true,
+        "location": "Arizona",
+        "nickname": "Cardinals",
+        "shortDisplayName": "Cardinals"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "ATL",
+        "alternateColor": "000000",
+        "color": "a71930",
+        "displayName": "Atlanta Falcons",
+        "id": "1",
+        "isActive": true,
+        "location": "Atlanta",
+        "nickname": "Falcons",
+        "shortDisplayName": "Falcons"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "BAL",
+        "alternateColor": "000000",
+        "color": "29126f",
+        "displayName": "Baltimore Ravens",
+        "id": "33",
+        "isActive": true,
+        "location": "Baltimore",
+        "nickname": "Ravens",
+        "shortDisplayName": "Ravens"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "BUF",
+        "alternateColor": "d50a0a",
+        "color": "00338d",
+        "displayName": "Buffalo Bills",
+        "id": "2",
+        "isActive": true,
+        "location": "Buffalo",
+        "nickname": "Bills",
+        "shortDisplayName": "Bills"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CAR",
+        "alternateColor": "000000",
+        "color": "0085ca",
+        "displayName": "Carolina Panthers",
+        "id": "29",
+        "isActive": true,
+        "location": "Carolina",
+        "nickname": "Panthers",
+        "shortDisplayName": "Panthers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CHI",
+        "alternateColor": "e64100",
+        "color": "0b1c3a",
+        "displayName": "Chicago Bears",
+        "id": "3",
+        "isActive": true,
+        "location": "Chicago",
+        "nickname": "Bears",
+        "shortDisplayName": "Bears"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CIN",
+        "alternateColor": "000000",
+        "color": "fb4f14",
+        "displayName": "Cincinnati Bengals",
+        "id": "4",
+        "isActive": true,
+        "location": "Cincinnati",
+        "nickname": "Bengals",
+        "shortDisplayName": "Bengals"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CLE",
+        "alternateColor": "ff3c00",
+        "color": "472a08",
+        "displayName": "Cleveland Browns",
+        "id": "5",
+        "isActive": true,
+        "location": "Cleveland",
+        "nickname": "Browns",
+        "shortDisplayName": "Browns"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "DAL",
+        "alternateColor": "b0b7bc",
+        "color": "002a5c",
+        "displayName": "Dallas Cowboys",
+        "id": "6",
+        "isActive": true,
+        "location": "Dallas",
+        "nickname": "Cowboys",
+        "shortDisplayName": "Cowboys"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "DEN",
+        "alternateColor": "fc4c02",
+        "color": "0a2343",
+        "displayName": "Denver Broncos",
+        "id": "7",
+        "isActive": true,
+        "location": "Denver",
+        "nickname": "Broncos",
+        "shortDisplayName": "Broncos"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "DET",
+        "alternateColor": "bbbbbb",
+        "color": "0076b6",
+        "displayName": "Detroit Lions",
+        "id": "8",
+        "isActive": true,
+        "location": "Detroit",
+        "nickname": "Lions",
+        "shortDisplayName": "Lions"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "GB",
+        "alternateColor": "ffb612",
+        "color": "204e32",
+        "displayName": "Green Bay Packers",
+        "id": "9",
+        "isActive": true,
+        "location": "Green Bay",
+        "nickname": "Packers",
+        "shortDisplayName": "Packers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "HOU",
+        "alternateColor": "eb0028",
+        "color": "021018",
+        "displayName": "Houston Texans",
+        "id": "34",
+        "isActive": true,
+        "location": "Houston",
+        "nickname": "Texans",
+        "shortDisplayName": "Texans"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "IND",
+        "alternateColor": "ffffff",
+        "color": "003b75",
+        "displayName": "Indianapolis Colts",
+        "id": "11",
+        "isActive": true,
+        "location": "Indianapolis",
+        "nickname": "Colts",
+        "shortDisplayName": "Colts"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "JAX",
+        "alternateColor": "d7a22a",
+        "color": "007487",
+        "displayName": "Jacksonville Jaguars",
+        "id": "30",
+        "isActive": true,
+        "location": "Jacksonville",
+        "nickname": "Jaguars",
+        "shortDisplayName": "Jaguars"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "KC",
+        "alternateColor": "ffb612",
+        "color": "e31837",
+        "displayName": "Kansas City Chiefs",
+        "id": "12",
+        "isActive": true,
+        "location": "Kansas City",
+        "nickname": "Chiefs",
+        "shortDisplayName": "Chiefs"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "LV",
+        "alternateColor": "a5acaf",
+        "color": "000000",
+        "displayName": "Las Vegas Raiders",
+        "id": "13",
+        "isActive": true,
+        "location": "Las Vegas",
+        "nickname": "Raiders",
+        "shortDisplayName": "Raiders"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "LAC",
+        "alternateColor": "ffc20e",
+        "color": "0080c6",
+        "displayName": "Los Angeles Chargers",
+        "id": "24",
+        "isActive": true,
+        "location": "Los Angeles",
+        "nickname": "Chargers",
+        "shortDisplayName": "Chargers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "LAR",
+        "alternateColor": "ffd100",
+        "color": "003594",
+        "displayName": "Los Angeles Rams",
+        "id": "14",
+        "isActive": true,
+        "location": "Los Angeles",
+        "nickname": "Rams",
+        "shortDisplayName": "Rams"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "MIA",
+        "alternateColor": "fc4c02",
+        "color": "008e97",
+        "displayName": "Miami Dolphins",
+        "id": "15",
+        "isActive": true,
+        "location": "Miami",
+        "nickname": "Dolphins",
+        "shortDisplayName": "Dolphins"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "MIN",
+        "alternateColor": "ffc62f",
+        "color": "4f2683",
+        "displayName": "Minnesota Vikings",
+        "id": "16",
+        "isActive": true,
+        "location": "Minnesota",
+        "nickname": "Vikings",
+        "shortDisplayName": "Vikings"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NE",
+        "alternateColor": "c60c30",
+        "color": "002a5c",
+        "displayName": "New England Patriots",
+        "id": "17",
+        "isActive": true,
+        "location": "New England",
+        "nickname": "Patriots",
+        "shortDisplayName": "Patriots"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NO",
+        "alternateColor": "000000",
+        "color": "d3bc8d",
+        "displayName": "New Orleans Saints",
+        "id": "18",
+        "isActive": true,
+        "location": "New Orleans",
+        "nickname": "Saints",
+        "shortDisplayName": "Saints"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NYG",
+        "alternateColor": "c9243f",
+        "color": "003c7f",
+        "displayName": "New York Giants",
+        "id": "19",
+        "isActive": true,
+        "location": "New York",
+        "nickname": "Giants",
+        "shortDisplayName": "Giants"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NYJ",
+        "alternateColor": "ffffff",
+        "color": "115740",
+        "displayName": "New York Jets",
+        "id": "20",
+        "isActive": true,
+        "location": "New York",
+        "nickname": "Jets",
+        "shortDisplayName": "Jets"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "PHI",
+        "alternateColor": "000000",
+        "color": "06424d",
+        "displayName": "Philadelphia Eagles",
+        "id": "21",
+        "isActive": true,
+        "location": "Philadelphia",
+        "nickname": "Eagles",
+        "shortDisplayName": "Eagles"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "PIT",
+        "alternateColor": "ffb612",
+        "color": "000000",
+        "displayName": "Pittsburgh Steelers",
+        "id": "23",
+        "isActive": true,
+        "location": "Pittsburgh",
+        "nickname": "Steelers",
+        "shortDisplayName": "Steelers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "SF",
+        "alternateColor": "b3995d",
+        "color": "aa0000",
+        "displayName": "San Francisco 49ers",
+        "id": "25",
+        "isActive": true,
+        "location": "San Francisco",
+        "nickname": "49ers",
+        "shortDisplayName": "49ers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "SEA",
+        "alternateColor": "69be28",
+        "color": "002a5c",
+        "displayName": "Seattle Seahawks",
+        "id": "26",
+        "isActive": true,
+        "location": "Seattle",
+        "nickname": "Seahawks",
+        "shortDisplayName": "Seahawks"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "TB",
+        "alternateColor": "3e3a35",
+        "color": "bd1c36",
+        "displayName": "Tampa Bay Buccaneers",
+        "id": "27",
+        "isActive": true,
+        "location": "Tampa Bay",
+        "nickname": "Buccaneers",
+        "shortDisplayName": "Buccaneers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "TEN",
+        "alternateColor": "001532",
+        "color": "4495d2",
+        "displayName": "Tennessee Titans",
+        "id": "10",
+        "isActive": true,
+        "location": "Tennessee",
+        "nickname": "Titans",
+        "shortDisplayName": "Titans"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "WSH",
+        "alternateColor": "ffb612",
+        "color": "5a1414",
+        "displayName": "Washington Commanders",
+        "id": "28",
+        "isActive": true,
+        "location": "Washington",
+        "nickname": "Commanders",
+        "shortDisplayName": "Commanders"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

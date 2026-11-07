@@ -38,6 +38,36 @@
   .filter button { padding: 2px 11px; }
   .filter button[aria-pressed="true"] { background: var(--accent); color: var(--card); }
   .single .teamcol { display: none; }
+  /* nav + teams screen */
+  nav.tabs { display: flex; gap: 4px; margin: 0 0 14px; border-bottom: 1px solid var(--line); }
+  nav.tabs a { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  nav.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  nav.tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .stack { display: grid; gap: 12px; }
+  .teamrow { padding: 12px 0; border-top: 1px solid var(--line); }
+  .teamrow:first-child { border-top: 0; padding-top: 0; }
+  .teamhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .teamhead .grow { flex: 1; }
+  .muted { color: var(--muted); }
+  .fields { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-start; }
+  .bulbpick { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .bulbpick label, .colorfield { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  .colorfield { flex-wrap: wrap; }
+  input[type="color"] { width: 38px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; cursor: pointer; }
+  input[type="text"], input[type="search"], select { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .search-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .search-row input { flex: 1; min-width: 180px; }
+  .results { max-height: 320px; overflow-y: auto; }
+  .result { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+  .result:first-child { border-top: 0; }
+  .result .grow { flex: 1; min-width: 0; }
+  .banner { padding: 10px 12px; border-radius: 8px; border: 1px solid currentColor; margin-bottom: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .savebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .savebar .grow { flex: 1; }
+  button.primary { background: var(--accent); color: var(--card); }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button.danger:hover:not(:disabled) { background: var(--bad); color: var(--card); }
   .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
   tr.next td { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
   td.num { font-variant-numeric: tabular-nums; }
@@ -70,8 +100,11 @@
   .poss { color: var(--warn); }
   .sit { margin-top: 8px; font-size: 14px; }
   .sit .rz { color: var(--bad); font-weight: 600; margin-left: 8px; }
+  .nextgrid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .nextcard { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .nextcard .teamtag { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
   .next-label { margin-bottom: 4px; }
-  .next-big { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .next-big { font-size: 26px; font-weight: 700; line-height: 1.2; }
   .next-when { font-size: 16px; margin-top: 2px; }
   .next-count { font-size: 20px; color: var(--accent); margin-top: 6px; font-variant-numeric: tabular-nums; }
   .sb-foot { margin-top: 12px; font-size: 13px; color: var(--muted); }
@@ -92,6 +125,11 @@
     <span id="mode" class="pill"></span>
     <span id="meta" class="meta"></span>
   </header>
+  <nav class="tabs" aria-label="Sections">
+    <a id="tab-status" href="#/status">Status</a>
+    <a id="tab-teams" href="#/teams">Teams</a>
+  </nav>
+  <div id="view-status">
   <div class="grid">
     <section class="card wide">
       <div class="sb-top"><h2>Scoreboard</h2><span id="sb-poll" class="poll"></span></div>
@@ -114,6 +152,27 @@
       </table></div>
       <p id="no-events" class="empty" hidden>No scores recorded yet.</p>
     </section>
+  </div>
+  </div>
+
+  <div id="view-teams" hidden>
+    <div id="teams-banner"></div>
+    <div class="stack">
+      <section class="card">
+        <h2>Followed teams</h2>
+        <div id="teams-followed"></div>
+        <div class="savebar" id="teams-savebar"></div>
+      </section>
+      <section class="card">
+        <h2>Follow a team</h2>
+        <div class="search-row">
+          <label class="muted" for="team-league">League</label>
+          <select id="team-league"></select>
+          <input id="team-search" type="search" placeholder="Search by team name or abbreviation" aria-label="Search teams" autocomplete="off">
+        </div>
+        <div id="team-results" class="results" aria-live="polite"></div>
+      </section>
+    </div>
   </div>
 </main>
 <script>
@@ -260,7 +319,7 @@ function tick() {  // once a second: countdowns and "last poll N s ago"
     e.textContent = s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
   });
 }
-function teamRow(g, side, cols, other) {
+function scoreRow(g, side, cols, other) {
   const t = g[side], tr = el("tr", undefined, t.us ? "us" : "");
   const name = el("td", undefined, "team");
   if (g.situation && g.situation.possession && g.situation.possession === t.abbr) name.append(el("span", "● ", "poss"));
@@ -290,7 +349,7 @@ function gameBlock(g) {
   hr.append(el("th", ""));
   thead.append(hr);
   const tbody = el("tbody");
-  tbody.append(teamRow(g, "away", cols, g.home), teamRow(g, "home", cols, g.away));  // ESPN order: visitors on top
+  tbody.append(scoreRow(g, "away", cols, g.home), scoreRow(g, "home", cols, g.away));  // ESPN order: visitors on top
   table.append(thead, tbody);
   const wrap = el("div", undefined, "scroll"); wrap.append(table); box.append(wrap);
 
@@ -301,11 +360,32 @@ function gameBlock(g) {
   }
   return box;
 }
-function nextLine(sb) {
-  const n = sb.next; if (!n) return null;
-  const line = el("div", undefined, "sb-foot");
-  line.textContent = `Next up: ${n.us ? `${n.us} ${n.home ? "vs" : "@"} ${n.opp}` : n.name} · ${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`;
-  return line;
+const teamByKey = (key) => ((lastStatus && lastStatus.teams) || []).find((t) => t.key === key);
+const matchup = (n) => (n.us ? `${n.us} ${n.home ? "vs" : "@"} ${n.opp}` : n.name);
+function whenLabel(n) {  // TONIGHT / TOMORROW / THIS WEEK / NEXT GAME, by the viewer's calendar
+  const start = new Date(n.start_utc), now = new Date(serverNow());
+  const days = Math.round((new Date(start.getFullYear(), start.getMonth(), start.getDate()) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+  if (days <= 0) return start.getHours() >= 17 ? "TONIGHT" : "TODAY";
+  if (days === 1) return "TOMORROW";
+  return n.in_week ? "THIS WEEK" : "NEXT GAME";
+}
+function nextCard(n, showTeam) {
+  const card = el("div", undefined, "nextcard"), t = teamByKey(n.team_key);
+  if (showTeam && t) { const tag = el("div", undefined, "teamtag"); tag.append(dot(t.color), document.createTextNode(t.label)); card.append(tag); }
+  const label = whenLabel(n);
+  card.append(el("div", label, "pill next-label " + (label === "NEXT GAME" ? "" : "ok")));
+  card.append(el("div", matchup(n), "next-big"));
+  card.append(el("div", `${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`, "next-when"));
+  const c = el("div", "", "next-count"); c.dataset.start = n.start_utc; c.dataset.prefix = "in "; card.append(c);
+  return card;
+}
+function nextLines(sb) {  // while a game is on the card: the other teams' next games, compactly
+  const multi = ((lastStatus && lastStatus.teams) || []).length > 1;
+  return sb.next_games.map((n) => {
+    const t = teamByKey(n.team_key), line = el("div", undefined, "sb-foot");
+    line.textContent = `Next up${multi && t ? " · " + t.label : ""}: ${matchup(n)} · ${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`;
+    return line;
+  });
 }
 function renderScoreboard(sb) {
   const p = sb.polling, poll = $("sb-poll");
@@ -320,15 +400,11 @@ function renderScoreboard(sb) {
   const box = $("scoreboard"), parts = [];
   if (sb.games.length) {
     sb.games.forEach((g) => parts.push(gameBlock(g)));
-    const nl = nextLine(sb); if (nl) parts.push(nl);
-  } else if (sb.next) {
-    const n = sb.next, wrap = el("div");
-    wrap.append(el("div", sb.next_in_week ? "THIS WEEK" : "NEXT GAME", "pill " + (sb.next_in_week ? "ok" : "") + " next-label"));
-    wrap.append(el("div", n.us ? `${n.us} ${n.home ? "vs" : "@"} ${n.opp}` : n.name, "next-big"));
-    wrap.append(el("div", `${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`, "next-when"));
-    const c = el("div", "", "next-count"); c.dataset.start = n.start_utc; c.dataset.prefix = "in "; wrap.append(c);
-    if (!sb.next_in_week) wrap.append(el("div", "No game this week.", "sb-foot"));
-    parts.push(wrap);
+    parts.push(...nextLines(sb));
+  } else if (sb.next_games.length) {
+    const grid = el("div", undefined, "nextgrid"), multi = ((lastStatus && lastStatus.teams) || []).length > 1;
+    sb.next_games.forEach((n) => grid.append(nextCard(n, multi)));
+    parts.push(grid);
   } else {
     parts.push(el("div", "No upcoming games.", "empty"));
   }
@@ -378,7 +454,212 @@ async function refresh() {
     $("meta").textContent = "can't reach the server (" + e.message + "); retrying…";
   }
 }
-refresh(); setInterval(refresh, 10000); setInterval(tick, 1000);
+
+// ---- Teams screen -------------------------------------------------------------------------
+// Edits are a draft until Save. Everything from the server is inserted with textContent.
+const TM = {loaded: false, revision: 0, saved: [], draft: [], bulbs: [], leagues: [], info: {},
+            errors: {}, banner: null, saving: false, seq: 0, league: "nfl", results: [],
+            resultsNote: ""};
+const keyOf = (t) => `${t.league}:${t.id}`;
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const dirty = () => JSON.stringify(TM.draft) !== JSON.stringify(TM.saved);
+const leagueLabel = (k) => (TM.leagues.find((l) => l.key === k) || {label: k.toUpperCase()}).label;
+function luminance(hex) {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+async function getJson(url) {
+  const r = await fetch(url, {cache: "no-store"});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+  return body;
+}
+function dot(color) { const d = el("span", undefined, "swatch"); if (color) d.style.background = color; return d; }
+
+async function loadTeams() {
+  try {
+    const [s, leagues] = await Promise.all([getJson("api/settings"), getJson("api/leagues")]);
+    TM.revision = s.sections.teams.revision;
+    TM.saved = s.sections.teams.value; TM.draft = clone(TM.saved);
+    TM.bulbs = s.sections.bulbs.value.map((b) => b.name);
+    TM.leagues = leagues;
+    if (!leagues.some((l) => l.key === TM.league) && leagues.length) TM.league = leagues[0].key;
+    TM.loaded = true; TM.errors = {}; TM.banner = null;
+    renderLeagueSelect();
+    await loadInfo();
+  } catch (e) {
+    TM.banner = {cls: "bad", text: "Couldn't load your teams: " + e.message};
+  }
+  renderTeams(); runSearch();
+}
+async function loadInfo() {  // names and ESPN colors for the followed teams
+  TM.resultsNote = "";
+  await Promise.all([...new Set(TM.draft.map((t) => t.league))].map(async (lg) => {
+    try { (await getJson(`api/teams/search?league=${encodeURIComponent(lg)}`)).forEach((t) => { TM.info[keyOf(t)] = t; }); }
+    catch (e) { TM.resultsNote = "ESPN isn't answering, so team names and colors are unavailable for now."; }
+  }));
+}
+function renderLeagueSelect() {
+  const sel = $("team-league");
+  sel.replaceChildren(...TM.leagues.map((l) => { const o = el("option", l.label); o.value = l.key; o.selected = l.key === TM.league; return o; }));
+}
+
+// Touching a team clears its error messages (and the "fix these" banner once none are left).
+function clearErrors(i) {
+  delete TM.errors[i];
+  if (TM.banner && TM.banner.fix && !Object.keys(TM.errors).length) TM.banner = null;
+  renderBanner();
+}
+function colorField(t, key, label, espn, i) {
+  const wrap = el("span", undefined, "colorfield");
+  const input = document.createElement("input");
+  input.type = "color"; input.value = t[key] || espn || "#ffffff";
+  input.setAttribute("aria-label", `${t.abbr} ${label.toLowerCase()} color`);
+  input.addEventListener("input", () => { t[key] = input.value; renderSaveBar(); });
+  input.addEventListener("change", () => { clearErrors(i); renderFollowed(); });  // picker closed
+  wrap.append(el("span", label), input);
+  const same = t[key] && espn && t[key].toLowerCase() === espn.toLowerCase();  // pre-filled, unchanged
+  wrap.append(el("span", t[key] && !same ? "custom" : (espn ? "ESPN's" : "default"), "muted"));
+  if (t[key] && !same) {
+    const reset = el("button", "Use ESPN's"); reset.type = "button";
+    reset.addEventListener("click", () => { t[key] = null; clearErrors(i); renderFollowed(); renderSaveBar(); });
+    wrap.append(reset);
+  }
+  const shown = t[key] || espn;
+  if (shown && luminance(shown) < 0.03) wrap.append(el("span", "very dark: will look dim or off on a bulb", "muted"));
+  return wrap;
+}
+function followedRow(t, i) {
+  const info = TM.info[keyOf(t)] || {}, row = el("div", undefined, "teamrow");
+  const head = el("div", undefined, "teamhead");
+  head.append(dot(t.color || info.color), dot(t.alt_color || info.alt_color), el("strong", t.abbr),
+              el("span", `${info.name ? info.name + " · " : ""}${leagueLabel(t.league)}`, "muted grow"));
+  if (!TM.saved.some((s) => keyOf(s) === keyOf(t))) head.append(el("span", "not saved yet", "pill warn"));
+  const rm = el("button", "Remove", "danger"); rm.type = "button";
+  rm.setAttribute("aria-label", `Stop following ${t.abbr}`);
+  rm.addEventListener("click", () => { TM.draft.splice(i, 1); TM.errors = {}; renderFollowed(); renderSaveBar(); renderResults(); });
+  head.append(rm);
+  row.append(head);
+
+  const fields = el("div", undefined, "fields"), bulbs = el("span", undefined, "bulbpick");
+  bulbs.append(el("span", "Bulbs", "muted"));
+  TM.bulbs.forEach((name) => {
+    const lab = el("label"), cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = t.bulbs.includes(name);
+    cb.addEventListener("change", () => {
+      t.bulbs = TM.bulbs.filter((b) => (b === name ? cb.checked : t.bulbs.includes(b)));
+      clearErrors(i); renderFollowed(); renderSaveBar();
+    });
+    lab.append(cb, document.createTextNode(name)); bulbs.append(lab);
+  });
+  fields.append(bulbs, colorField(t, "color", "Color", info.color, i), colorField(t, "alt_color", "Alternate", info.alt_color, i));
+  row.append(fields);
+  (TM.errors[i] || []).forEach((m) => row.append(el("div", m, "err")));
+  return row;
+}
+function renderFollowed() {
+  const box = $("teams-followed");
+  if (!TM.loaded) { box.replaceChildren(el("p", "Loading…", "empty")); return; }
+  box.replaceChildren(...(TM.draft.length ? TM.draft.map(followedRow)
+    : [el("p", "No teams followed. Search below to follow one.", "empty")]));
+}
+function renderBanner() {
+  const box = $("teams-banner");
+  if (!TM.banner) { box.replaceChildren(); return; }
+  const b = el("div", undefined, "banner " + TM.banner.cls);
+  b.setAttribute("role", TM.banner.cls === "bad" ? "alert" : "status");
+  b.append(el("span", TM.banner.text));
+  if (TM.banner.action) { const a = el("button", TM.banner.action.label); a.type = "button"; a.addEventListener("click", TM.banner.action.fn); b.append(a); }
+  box.replaceChildren(b);
+}
+function renderSaveBar() {
+  const bar = $("teams-savebar"), changed = dirty();
+  const save = el("button", TM.saving ? "Saving…" : "Save", "primary"); save.type = "button";
+  save.disabled = TM.saving || !changed; save.addEventListener("click", saveTeams);
+  const discard = el("button", "Discard changes"); discard.type = "button";
+  discard.disabled = TM.saving || !changed;
+  discard.addEventListener("click", () => { TM.draft = clone(TM.saved); TM.errors = {}; TM.banner = null; renderTeams(); });
+  bar.replaceChildren(el("span", changed ? "Unsaved changes" : (TM.loaded ? "All changes saved" : ""), "grow " + (changed ? "warn" : "muted")), discard, save);
+}
+function renderResults() {
+  const box = $("team-results");
+  if (TM.resultsNote && !TM.results.length) { box.replaceChildren(el("p", TM.resultsNote, "err")); return; }
+  if (!TM.results.length) { box.replaceChildren(el("p", "No teams match.", "empty")); return; }
+  box.replaceChildren(...TM.results.map((t) => {
+    const row = el("div", undefined, "result"), mine = TM.draft.some((d) => keyOf(d) === keyOf(t));
+    const text = el("span", undefined, "grow");
+    text.append(el("strong", t.name), el("span", ` ${t.abbr} · ${leagueLabel(t.league)}`, "muted"));
+    const btn = el("button", mine ? "Following" : "Follow"); btn.type = "button"; btn.disabled = mine;
+    btn.setAttribute("aria-label", `${mine ? "Following" : "Follow"} ${t.name}`);
+    btn.addEventListener("click", () => follow(t));
+    row.append(dot(t.color), dot(t.alt_color), text, btn);
+    return row;
+  }));
+}
+function renderTeams() { renderBanner(); renderFollowed(); renderSaveBar(); renderResults(); }
+
+function follow(t) {
+  if (!TM.bulbs.length) {
+    TM.banner = {cls: "bad", text: "Add a bulb first: a followed team needs a bulb to light. (Bulbs are set in config.toml for now.)"};
+    renderBanner(); return;
+  }
+  TM.info[keyOf(t)] = t;
+  TM.draft.push({league: t.league, id: t.id, abbr: t.abbr, bulbs: [TM.bulbs[0]], color: t.color, alt_color: t.alt_color});
+  TM.banner = null; TM.errors = {};
+  renderTeams();
+}
+let searchTimer = null;
+function runSearch() {
+  const seq = ++TM.seq, q = $("team-search").value.trim();
+  getJson(`api/teams/search?league=${encodeURIComponent(TM.league)}&q=${encodeURIComponent(q)}`)
+    .then((r) => { if (seq === TM.seq) { TM.results = r; TM.resultsNote = ""; renderResults(); } })
+    .catch((e) => { if (seq === TM.seq) { TM.results = []; TM.resultsNote = "Couldn't search: " + e.message; renderResults(); } });
+}
+async function saveTeams() {
+  TM.saving = true; TM.banner = null; TM.errors = {}; renderSaveBar();
+  try {
+    const r = await fetch("api/settings/teams", {method: "PUT", headers: {"X-Gameday": "1", "If-Match": String(TM.revision), "Content-Type": "application/json"}, body: JSON.stringify({value: TM.draft})});
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) {
+      TM.revision = body.revision; TM.saved = body.value; TM.draft = clone(body.value);
+      TM.banner = {cls: "ok", text: "Saved. Schedules for new teams are loading now."};
+      await loadInfo();
+      refresh(); setTimeout(refresh, 4000);
+    } else if (r.status === 422) {
+      const loose = [];
+      (body.errors || []).forEach((e) => {
+        const m = /^teams\[(\d+)\]\.?(.*)$/.exec(e.path);
+        if (m) (TM.errors[m[1]] = TM.errors[m[1]] || []).push(m[2] ? `${m[2]}: ${e.message}` : e.message);
+        else loose.push(e.path ? `${e.path}: ${e.message}` : e.message);
+      });
+      TM.banner = {cls: "bad", fix: !loose.length, text: loose.length ? loose.join("; ") : "Some teams need fixing before this can be saved."};
+    } else if (r.status === 409) {
+      TM.banner = {cls: "bad", text: `Teams were changed somewhere else (now revision ${body.current_revision}). Your edits were not saved.`, action: {label: "Load latest", fn: loadTeams}};
+    } else {
+      TM.banner = {cls: "bad", text: body.detail || `HTTP ${r.status}`};
+    }
+  } catch (e) {
+    TM.banner = {cls: "bad", text: "Request failed: " + e.message};
+  }
+  TM.saving = false; renderTeams();
+}
+$("team-league").addEventListener("change", (e) => { TM.league = e.target.value; runSearch(); });
+$("team-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 250); });
+window.addEventListener("beforeunload", (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---- navigation ---------------------------------------------------------------------------
+function showView() {
+  const teams = location.hash === "#/teams";
+  $("view-status").hidden = teams; $("view-teams").hidden = !teams;
+  $("tab-status").setAttribute("aria-current", teams ? "false" : "page");
+  $("tab-teams").setAttribute("aria-current", teams ? "page" : "false");
+  if (teams && !(TM.loaded && dirty())) loadTeams();  // never throw away unsaved edits by navigating
+  else if (teams) renderTeams();
+}
+window.addEventListener("hashchange", showView);
+
+showView(); refresh(); setInterval(refresh, 10000); setInterval(tick, 1000);
 </script>
 </body>
 </html>

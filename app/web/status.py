@@ -19,6 +19,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.bulbs.base import BulbAdapter, Pattern
 from app.config import Config, ConfigError
 from app.dispatch.dispatcher import Dispatcher, utc_now
+from app.espn.client import LEAGUES, EspnClient, EspnError
+from app.espn.schedule import parse_team_list
 from app.settings import SECTIONS, error_location
 from app.settings_service import SettingsService
 from app.store import RevisionConflict, Store
@@ -126,6 +128,7 @@ def schedule_rows(store: Store, cfg: Config) -> list[dict]:
 
 
 THIS_WEEK = timedelta(days=7)
+MAX_NEXT_GAMES = 3  # how many followed teams' next games the Scoreboard shows at once
 
 
 def _scoreboard_game(store: Store, live: dict, followed: set[str]) -> dict:
@@ -159,7 +162,8 @@ def scoreboard_card(
     store: Store, cfg: Config, stats: WatcherStats, now: datetime, schedule: list[dict]
 ) -> dict:
     """What the Scoreboard card shows: games in their window (live/pre), a game that just
-    finished (for `final_hold_min`), or else the next upcoming game for any followed team."""
+    finished (for `final_hold_min`), or else the next game of each followed team (at most
+    MAX_NEXT_GAMES)."""
     followed = {team_key(t.league, t.abbr) for t in cfg.teams}
     hold = timedelta(minutes=cfg.web.final_hold_min)
     games = []
@@ -174,11 +178,20 @@ def scoreboard_card(
     games.sort(key=lambda g: (g["state"] != "in", g["start_utc"] or ""))
     states = {g["state"] for g in games}
     shown = {g["id"] for g in games}
-    # "next" means not started: a game already in progress without live data yet is not next
-    upcoming = next((r for r in schedule if r["status"] == "pre" and r["id"] not in shown), None)
-    in_week = False
-    if upcoming:
-        in_week = datetime.fromisoformat(upcoming["start_utc"]) - now <= THIS_WEEK
+    # "Next" means not started: a game already in progress without live data yet is not next.
+    # One per followed team (its first such game), soonest first; a game two followed teams
+    # share is one card, kept on the team that comes first in the list (schedule is in that order).
+    first_per_team: dict[str, dict] = {}
+    for r in schedule:
+        if r["status"] == "pre" and r["id"] not in shown:
+            first_per_team.setdefault(r["team_key"] or "", r)
+    next_games, seen = [], set()
+    for r in sorted(first_per_team.values(), key=lambda r: r["start_utc"]):
+        if r["id"] not in seen:
+            seen.add(r["id"])
+            in_week = datetime.fromisoformat(r["start_utc"]) - now <= THIS_WEEK
+            next_games.append({**r, "in_week": in_week})
+    next_games = next_games[:MAX_NEXT_GAMES]
     if "in" in states:
         mode = "live"
     elif "pre" in states:
@@ -186,7 +199,7 @@ def scoreboard_card(
     elif games:
         mode = "final"
     else:
-        mode = "next" if upcoming else "idle"
+        mode = "next" if next_games else "idle"
     return {
         "mode": mode,
         "polling": {
@@ -196,8 +209,7 @@ def scoreboard_card(
             "lead_min": cfg.general.watch_lead_min,
         },
         "games": games,
-        "next": upcoming,
-        "next_in_week": in_week,
+        "next_games": next_games,
     }
 
 
@@ -268,6 +280,7 @@ def create_app(
     pulse_pattern: Callable[[str], Pattern] | None = None,
     clock: Callable[[], float] = time.monotonic,
     settings: SettingsService | None = None,
+    espn: EspnClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Gameday Lights status", docs_url=None, redoc_url=None, openapi_url=None)
     pings = BulbPings(bulbs)
@@ -314,6 +327,8 @@ def create_app(
 
     if settings is not None:
         _add_settings_routes(app, settings)
+    if espn is not None:
+        _add_team_routes(app, espn, cfg)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -400,6 +415,32 @@ def _add_settings_routes(app: FastAPI, settings: SettingsService) -> None:
         log.info("settings: %s saved (revision %d)", section, revision)
         value = settings.public_sections()[section]["value"]
         return {"revision": revision, "value": value, "applied": True}
+
+
+def _add_team_routes(app: FastAPI, espn, cfg) -> None:
+    """Find teams to follow: ESPN's team list (cached 24 h by the client), with colors."""
+    labels = {"nfl": "NFL", "nhl": "NHL"}
+
+    @app.get("/api/leagues")
+    async def leagues() -> list[dict]:
+        return [{"key": k, "label": labels.get(k, k.upper())} for k in LEAGUES]
+
+    @app.get("/api/teams/search")
+    async def search_teams(league: str, q: str = "") -> list[dict]:
+        if league not in LEAGUES:
+            raise HTTPException(400, f"unknown league {league!r}")
+        try:
+            teams = parse_team_list(await espn.teams(league))
+        except EspnError as e:
+            raise HTTPException(502, f"ESPN is not answering: {e}") from None
+        words = q.lower().split()
+        followed = {(t.league, t.id) for t in _resolve(cfg).teams}
+        found = [
+            {**t, "league": league, "followed": (league, t["id"]) in followed}
+            for t in teams
+            if all(w in f"{t['name']} {t['abbr']}".lower() for w in words)
+        ]
+        return found[:50]
 
 
 async def serve_status(app: FastAPI, host: str, port: int) -> None:

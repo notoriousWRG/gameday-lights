@@ -324,7 +324,7 @@ def test_scoreboard_live_shows_game_and_polling_state():
     (g,) = c["games"]
     assert (g["detail"], g["clock"], g["league"]) == ("4:21 - 3rd", "4:21", "nfl")
     assert (g["away"]["abbr"], g["away"]["us"], g["home"]["us"]) == ("GB", True, False)
-    assert g["start_utc"] is not None and c["next"]["id"] == "g2"
+    assert g["start_utc"] is not None and [n["id"] for n in c["next_games"]] == ["g2"]
 
 
 def test_scoreboard_pre_game_inside_the_lead_window():
@@ -346,21 +346,21 @@ def test_scoreboard_final_held_then_falls_back_to_next_game():
 
 def test_scoreboard_next_game_this_week_or_not():
     c = card()
-    assert c["mode"] == "next" and c["next"]["id"] == "g2" and c["next_in_week"] is True
-    assert c["polling"]["active"] is False
+    assert c["mode"] == "next" and [n["id"] for n in c["next_games"]] == ["g2"]
+    assert c["next_games"][0]["in_week"] is True and c["polling"]["active"] is False
     far = card(now=NOW - timedelta(days=3))  # next game is now 10 days out
-    assert far["next"]["id"] == "g2" and far["next_in_week"] is False
+    assert far["next_games"][0]["id"] == "g2" and far["next_games"][0]["in_week"] is False
 
 
 def test_scoreboard_idle_with_nothing_scheduled():
     c = card(schedule=[])
-    assert c["mode"] == "idle" and c["next"] is None and c["games"] == []
+    assert c["mode"] == "idle" and c["next_games"] == [] and c["games"] == []
 
 
 def test_scoreboard_live_game_is_listed_first_and_not_repeated_as_next():
     c = card(live=[live_game(state="pre", gid="g1"), live_game(gid="g9")], watching=["g1", "g9"])
     assert c["mode"] == "live" and c["games"][0]["id"] == "g9"
-    assert c["next"]["id"] != "g1"
+    assert "g1" not in {n["id"] for n in c["next_games"]}
 
 
 async def test_status_includes_scoreboard_block():
@@ -499,3 +499,122 @@ async def test_pulse_endpoint_follows_a_bulb_added_after_startup():
         dispatcher.set_bulbs({"lamp": lamp, "den": den})
         assert (await c.post("/api/bulbs/den/pulse", headers=HDR)).status_code == 200
         assert den.calls and den.calls[0][0] == "snapshot"
+
+
+async def test_page_has_nav_and_the_teams_screen_wired_to_the_guarded_api():
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    for needle in ('id="tab-teams"', 'href="#/teams"', 'id="view-teams"', 'api/teams/search',
+                   'api/settings/teams', '"If-Match"', '"X-Gameday"', "beforeunload",
+                   "clearErrors", "Load latest"):
+        assert needle in html, needle
+    assert "innerHTML" not in html  # ESPN names and settings text only ever go in as text
+
+
+# --- next game for every followed team -------------------------------------------------------
+
+def teams_cfg(*teams):
+    """A config following (league, id, abbr) teams, all on one bulb."""
+    return Config(
+        GeneralConfig(True, "x.db", delay_s=45),
+        (BulbConfig("lamp", "10.0.0.5"),),
+        tuple(TeamConfig(lg, tid, abbr, ("lamp",)) for lg, tid, abbr in teams),
+        EffectConfig(),
+    )
+
+
+def next_games_for(cfg_, games, live=(), watching=(), now=NOW):
+    from app.web.status import schedule_rows, scoreboard_card
+
+    store = Store()
+    for g in games:
+        store.upsert_game(g)
+    stats = WatcherStats(started_at=NOW, watching_ids=list(watching), poll_interval_s=15.0,
+                         live={g["game_id"]: g for g in live})
+    return scoreboard_card(store, cfg_, stats, now, schedule_rows(store, cfg_))
+
+
+PENS = ("nhl", "16", "PIT")
+PACK = ("nfl", "9", "GB")
+TONIGHT = NOW + timedelta(hours=5)
+SUNDAY = NOW + timedelta(days=1, hours=6)
+
+
+def test_each_followed_team_gets_its_own_next_game_soonest_first():
+    games = [
+        Game("pens", "nhl", "PIT @ NYR", TONIGHT, "pre", "NYR", None, "PIT", None),
+        Game("gb", "nfl", "GB @ NE", SUNDAY, "pre", "NE", None, "GB", None),
+        Game("pens2", "nhl", "NJ @ PIT", SUNDAY + timedelta(days=2), "pre", "PIT", None,
+             "NJ", None),
+        Game("gb2", "nfl", "MIN @ GB", SUNDAY + timedelta(days=7), "pre", "GB", None, "MIN", None),
+    ]
+    c = next_games_for(teams_cfg(PACK, PENS), games)  # GB listed first, Pens play first
+    assert c["mode"] == "next"
+    assert [(n["id"], n["team_key"]) for n in c["next_games"]] == [
+        ("pens", "nhl:PIT"), ("gb", "nfl:GB")]  # soonest first, one card per team
+    pens, gb = c["next_games"]
+    assert (pens["us"], pens["opp"], pens["home"]) == ("PIT", "NYR", False)
+    assert (gb["us"], gb["opp"], gb["home"]) == ("GB", "NE", False)
+    assert pens["in_week"] and gb["in_week"]
+
+
+def test_a_team_with_nothing_upcoming_is_simply_left_out():
+    games = [Game("old", "nhl", "PIT @ NYR", NOW - timedelta(days=1), "post", "NYR", 2, "PIT", 3),
+             Game("gb", "nfl", "GB @ NE", SUNDAY, "pre", "NE", None, "GB", None)]
+    c = next_games_for(teams_cfg(PACK, PENS), games)
+    assert [n["team_key"] for n in c["next_games"]] == ["nfl:GB"]
+
+
+def test_at_most_three_next_games_the_soonest_three():
+    teams = [("nfl", "9", "GB"), ("nfl", "17", "NE"), ("nfl", "23", "PIT"), ("nhl", "16", "PIT")]
+    games = [
+        Game("g1", "nfl", "a", NOW + timedelta(days=4), "pre", "ZZZ", None, "GB", None),
+        Game("g2", "nfl", "b", NOW + timedelta(days=1), "pre", "ZZZ", None, "NE", None),
+        Game("g3", "nfl", "c", NOW + timedelta(days=3), "pre", "ZZZ", None, "PIT", None),
+        Game("g4", "nhl", "d", NOW + timedelta(days=2), "pre", "ZZZ", None, "PIT", None),
+    ]
+    c = next_games_for(teams_cfg(*teams), games)
+    assert [n["id"] for n in c["next_games"]] == ["g2", "g4", "g3"]  # g1 (GB, day 4) is cut
+
+
+def test_a_game_between_two_followed_teams_is_one_card_on_the_first_team():
+    games = [Game("derby", "nfl", "GB @ NE", SUNDAY, "pre", "NE", None, "GB", None),
+             Game("ne2", "nfl", "NE @ BUF", SUNDAY + timedelta(days=7), "pre", "BUF", None,
+                  "NE", None)]
+    c = next_games_for(teams_cfg(PACK, ("nfl", "17", "NE")), games)
+    assert [(n["id"], n["team_key"]) for n in c["next_games"]] == [("derby", "nfl:GB")]
+    # NE's next game IS the derby, so its following game must not show up as "next"
+    assert "ne2" not in {n["id"] for n in c["next_games"]}
+    c = next_games_for(teams_cfg(("nfl", "17", "NE"), PACK), games)  # order in the list decides
+    assert [(n["id"], n["team_key"]) for n in c["next_games"]] == [("derby", "nfl:NE")]
+
+
+def test_while_one_team_plays_the_others_next_games_are_listed_beside_it():
+    games = [Game("now", "nhl", "PIT @ NYR", NOW, "in", "NYR", 1, "PIT", 2),
+             Game("gb", "nfl", "GB @ NE", SUNDAY, "pre", "NE", None, "GB", None),
+             Game("later", "nhl", "NJ @ PIT", SUNDAY + timedelta(days=2), "pre", "PIT", None,
+                  "NJ", None)]
+    live = [live_game(gid="now")]
+    c = next_games_for(teams_cfg(PACK, PENS), games, live=live, watching=["now"])
+    assert c["mode"] == "live" and [g["id"] for g in c["games"]] == ["now"]
+    # the Pens' next game after tonight's is theirs to show; GB's is Sunday
+    assert [(n["id"], n["team_key"]) for n in c["next_games"]] == [
+        ("gb", "nfl:GB"), ("later", "nhl:PIT")]
+
+
+def test_next_games_use_the_leagues_in_the_key_not_just_the_abbreviation():
+    games = [Game("nfl-pit", "nfl", "PIT @ BAL", SUNDAY, "pre", "BAL", None, "PIT", None)]
+    c = next_games_for(teams_cfg(PENS), games)  # only the NHL PIT is followed
+    assert c["next_games"] == [] and c["mode"] == "idle"
+
+
+async def test_page_script_has_no_duplicate_function_names():
+    """A second `function foo` silently replaces the first (this once broke the live scoreboard)."""
+    import collections
+
+    async with client(make()) as c:
+        html = (await c.get("/")).text
+    names = re.findall(r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", html, re.M)
+    assert len(names) > 20  # the pattern really is finding the page's functions
+    dupes = [n for n, count in collections.Counter(names).items() if count > 1]
+    assert dupes == [], f"defined more than once: {dupes}"

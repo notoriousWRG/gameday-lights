@@ -216,3 +216,109 @@ async def test_settings_routes_do_not_exist_without_a_settings_service():
     async with client(make_status()) as c:
         assert (await c.get("/api/settings")).status_code == 404
         assert (await put(c, "household", {"delay_s": 30}, 1)).status_code == 404
+
+
+# --- team search ----------------------------------------------------------------------------
+
+class FakeEspn:
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, []
+
+    async def teams(self, league):
+        from app.espn.client import EspnError
+
+        self.calls.append(league)
+        if self.fail:
+            raise EspnError("down for the weekend")
+        import json
+
+        return json.loads((ROOT / "tests" / "fixtures" / "teams" / f"{league}.json").read_text())
+
+
+def make_with_espn(fail=False):
+    cfg = load_config(ROOT / "config.example.toml")
+    store = Store()
+    svc = SettingsService(store, settings.machine_raw_from_config(cfg), ROOT, now=lambda: NOW)
+    svc.seed(cfg)
+    svc.load()
+    espn = FakeEspn(fail)
+    app = create_app(store, lambda: svc.config, WatcherStats(started_at=NOW), {}, False,
+                     now=lambda: NOW, settings=svc, espn=espn)
+    return app, svc, espn
+
+
+async def search(c, league="nfl", q=""):
+    return await c.get("/api/teams/search", params={"league": league, "q": q})
+
+
+async def test_leagues_lists_the_supported_leagues():
+    app, _, _ = make_with_espn()
+    async with client(app) as c:
+        assert (await c.get("/api/leagues")).json() == [
+            {"key": "nfl", "label": "NFL"}, {"key": "nhl", "label": "NHL"}]
+
+
+async def test_search_matches_names_abbreviations_and_multiple_words_case_insensitively():
+    app, _, _ = make_with_espn()
+    async with client(app) as c:
+        assert len((await search(c)).json()) == 32  # empty query: everything
+        assert [t["abbr"] for t in (await search(c, q="green bay")).json()] == ["GB"]
+        assert [t["abbr"] for t in (await search(c, q="PACK")).json()] == ["GB"]
+        assert [t["abbr"] for t in (await search(c, q="gb")).json()] == ["GB"]
+        assert [t["abbr"] for t in (await search(c, q="  new   england ")).json()] == ["NE"]
+        assert (await search(c, q="zzzz")).json() == []
+        new = {t["abbr"] for t in (await search(c, q="new")).json()}
+        assert {"NE", "NO", "NYG", "NYJ"} <= new  # several New ... teams
+
+
+async def test_search_result_carries_what_the_follow_form_needs():
+    app, _, _ = make_with_espn()
+    async with client(app) as c:
+        (gb,) = (await search(c, q="green bay")).json()
+    assert gb == {"id": "9", "abbr": "GB", "name": "Green Bay Packers", "short_name": "Packers",
+                  "color": "#204e32", "alt_color": "#ffb612", "league": "nfl", "followed": True}
+
+
+async def test_search_marks_followed_teams_per_league():
+    app, svc, _ = make_with_espn()
+    teams = svc.sections()["teams"][1]
+    teams.append({"league": "nhl", "id": "16", "abbr": "PIT", "bulbs": ["living-room"],
+                  "color": None, "alt_color": None})
+    svc.update("teams", teams, 1)
+    async with client(app) as c:
+        nfl_pit = (await search(c, "nfl", "pittsburgh")).json()
+        nhl_pit = (await search(c, "nhl", "pittsburgh")).json()
+        nhl_gb = (await search(c, "nhl", "")).json()
+    assert [(t["name"], t["followed"]) for t in nfl_pit] == [("Pittsburgh Steelers", False)]
+    assert [(t["name"], t["followed"]) for t in nhl_pit] == [("Pittsburgh Penguins", True)]
+    assert not any(t["followed"] for t in nhl_gb if t["abbr"] == "GB")  # GB follows only in the NFL
+
+
+async def test_search_follows_settings_changes_without_a_restart():
+    app, svc, _ = make_with_espn()
+    async with client(app) as c:
+        assert (await search(c, q="patriots")).json()[0]["followed"] is False
+        teams = svc.sections()["teams"][1]
+        teams.append({"league": "nfl", "id": "17", "abbr": "NE", "bulbs": ["living-room"],
+                      "color": None, "alt_color": None})
+        svc.update("teams", teams, 1)
+        assert (await search(c, q="patriots")).json()[0]["followed"] is True
+
+
+async def test_search_errors():
+    app, _, espn = make_with_espn()
+    async with client(app) as c:
+        assert (await search(c, "curling")).status_code == 400
+        assert espn.calls == []  # the league is checked before ESPN is asked
+        assert (await c.get("/api/teams/search")).status_code == 422  # league is required
+    app, _, _ = make_with_espn(fail=True)
+    async with client(app) as c:
+        r = await search(c)
+        assert r.status_code == 502 and "down for the weekend" in r.json()["detail"]
+
+
+async def test_search_routes_do_not_exist_without_an_espn_client():
+    app, _ = make()
+    async with client(app) as c:
+        assert (await c.get("/api/leagues")).status_code == 404
+        assert (await c.get("/api/teams/search?league=nfl")).status_code == 404

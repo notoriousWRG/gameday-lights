@@ -129,3 +129,39 @@ def test_parse_scoreboard_game_live_situation():
                               "possession_text": None, "red_zone": True}
     event["competitions"][0]["situation"] = {"lastPlay": {"x": 1}}  # unknown shape -> ignored
     assert parse_scoreboard_game(event)["situation"] is None
+
+
+def _team_list(league):
+    return json.loads((FIX.parent / "teams" / f"{league}.json").read_text())
+
+
+def test_parse_team_list_real_nfl_and_nhl():
+    from app.espn.schedule import parse_team_list
+
+    nfl, nhl = parse_team_list(_team_list("nfl")), parse_team_list(_team_list("nhl"))
+    assert len(nfl) == 32 and len(nhl) == 32
+    assert [t["name"] for t in nfl] == sorted((t["name"] for t in nfl), key=str.lower)
+    gb = next(t for t in nfl if t["abbr"] == "GB")
+    assert (gb["id"], gb["name"], gb["short_name"]) == ("9", "Green Bay Packers", "Packers")
+    assert gb["color"] == "#204e32" and gb["alt_color"] == "#ffb612"
+    # the same abbreviation in two leagues is two different teams
+    pit_nfl = next(t for t in nfl if t["abbr"] == "PIT")
+    pit_nhl = next(t for t in nhl if t["abbr"] == "PIT")
+    assert (pit_nfl["id"], pit_nhl["id"]) == ("23", "16")
+    assert pit_nfl["name"] == "Pittsburgh Steelers" and pit_nhl["name"] == "Pittsburgh Penguins"
+
+
+def test_parse_team_list_tolerates_missing_and_bad_colors_and_skips_inactive():
+    from app.espn.schedule import parse_team_list
+
+    data = {"sports": [{"leagues": [{"teams": [
+        {"team": {"id": 1, "abbreviation": "AAA", "displayName": "Alpha", "color": "ABCDEF"}},
+        {"team": {"id": 2, "abbreviation": "BBB", "displayName": "Beta", "color": "nothex",
+                  "alternateColor": "#00ff00"}},
+        {"team": {"id": 3, "abbreviation": "CCC", "displayName": "Gone", "isActive": False}},
+        {"team": {"id": 4, "displayName": "No abbreviation"}},
+    ]}]}]}
+    a, b = parse_team_list(data)
+    assert (a["id"], a["color"], a["alt_color"]) == ("1", "#abcdef", None)  # id coerced to str
+    assert (b["color"], b["alt_color"]) == (None, "#00ff00")
+    assert parse_team_list({}) == []

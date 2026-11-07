@@ -1,0 +1,428 @@
+{
+ "sports": [
+  {
+   "leagues": [
+    {
+     "teams": [
+      {
+       "team": {
+        "abbreviation": "ANA",
+        "alternateColor": "000000",
+        "color": "fc4c02",
+        "displayName": "Anaheim Ducks",
+        "id": "25",
+        "isActive": true,
+        "location": "Anaheim",
+        "nickname": "Anaheim",
+        "shortDisplayName": "Ducks"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "BOS",
+        "alternateColor": "fdb71a",
+        "color": "231f20",
+        "displayName": "Boston Bruins",
+        "id": "1",
+        "isActive": true,
+        "location": "Boston",
+        "nickname": "Boston",
+        "shortDisplayName": "Bruins"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "BUF",
+        "alternateColor": "fdb71a",
+        "color": "00468b",
+        "displayName": "Buffalo Sabres",
+        "id": "2",
+        "isActive": true,
+        "location": "Buffalo",
+        "nickname": "Buffalo",
+        "shortDisplayName": "Sabres"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CGY",
+        "alternateColor": "000000",
+        "color": "dd1a32",
+        "displayName": "Calgary Flames",
+        "id": "3",
+        "isActive": true,
+        "location": "Calgary",
+        "nickname": "Calgary",
+        "shortDisplayName": "Flames"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CAR",
+        "alternateColor": "000000",
+        "color": "e30426",
+        "displayName": "Carolina Hurricanes",
+        "id": "7",
+        "isActive": true,
+        "location": "Carolina",
+        "nickname": "Carolina",
+        "shortDisplayName": "Hurricanes"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CHI",
+        "alternateColor": "000000",
+        "color": "e31937",
+        "displayName": "Chicago Blackhawks",
+        "id": "4",
+        "isActive": true,
+        "location": "Chicago",
+        "nickname": "Chicago",
+        "shortDisplayName": "Blackhawks"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "COL",
+        "alternateColor": "005ea3",
+        "color": "860038",
+        "displayName": "Colorado Avalanche",
+        "id": "17",
+        "isActive": true,
+        "location": "Colorado",
+        "nickname": "Colorado",
+        "shortDisplayName": "Avalanche"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "CBJ",
+        "alternateColor": "e31937",
+        "color": "002d62",
+        "displayName": "Columbus Blue Jackets",
+        "id": "29",
+        "isActive": true,
+        "location": "Columbus",
+        "nickname": "Columbus",
+        "shortDisplayName": "Blue Jackets"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "DAL",
+        "alternateColor": "000000",
+        "color": "20864c",
+        "displayName": "Dallas Stars",
+        "id": "9",
+        "isActive": true,
+        "location": "Dallas",
+        "nickname": "Dallas",
+        "shortDisplayName": "Stars"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "DET",
+        "alternateColor": "ffffff",
+        "color": "e30526",
+        "displayName": "Detroit Red Wings",
+        "id": "5",
+        "isActive": true,
+        "location": "Detroit",
+        "nickname": "Detroit",
+        "shortDisplayName": "Red Wings"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "EDM",
+        "alternateColor": "ff4c00",
+        "color": "00205b",
+        "displayName": "Edmonton Oilers",
+        "id": "6",
+        "isActive": true,
+        "location": "Edmonton",
+        "nickname": "Edmonton",
+        "shortDisplayName": "Oilers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "FLA",
+        "alternateColor": "002d62",
+        "color": "e51937",
+        "displayName": "Florida Panthers",
+        "id": "26",
+        "isActive": true,
+        "location": "Florida",
+        "nickname": "Florida",
+        "shortDisplayName": "Panthers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "LA",
+        "alternateColor": "a2aaad",
+        "color": "121212",
+        "displayName": "Los Angeles Kings",
+        "id": "8",
+        "isActive": true,
+        "location": "Los Angeles",
+        "nickname": "Los Angeles",
+        "shortDisplayName": "Kings"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "MIN",
+        "alternateColor": "ae122a",
+        "color": "124734",
+        "displayName": "Minnesota Wild",
+        "id": "30",
+        "isActive": true,
+        "location": "Minnesota",
+        "nickname": "Minnesota",
+        "shortDisplayName": "Wild"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "MTL",
+        "alternateColor": "013a81",
+        "color": "c41230",
+        "displayName": "Montreal Canadiens",
+        "id": "10",
+        "isActive": true,
+        "location": "Montreal",
+        "nickname": "Montreal",
+        "shortDisplayName": "Canadiens"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NSH",
+        "alternateColor": "002d62",
+        "color": "fdba31",
+        "displayName": "Nashville Predators",
+        "id": "27",
+        "isActive": true,
+        "location": "Nashville",
+        "nickname": "Nashville",
+        "shortDisplayName": "Predators"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NJ",
+        "alternateColor": "000000",
+        "color": "e30b2b",
+        "displayName": "New Jersey Devils",
+        "id": "11",
+        "isActive": true,
+        "location": "New Jersey",
+        "nickname": "New Jersey",
+        "shortDisplayName": "Devils"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NYI",
+        "alternateColor": "f47d31",
+        "color": "00529b",
+        "displayName": "New York Islanders",
+        "id": "12",
+        "isActive": true,
+        "location": "New York",
+        "nickname": "New York",
+        "shortDisplayName": "Islanders"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "NYR",
+        "alternateColor": "e51937",
+        "color": "0056ae",
+        "displayName": "New York Rangers",
+        "id": "13",
+        "isActive": true,
+        "location": "New York",
+        "nickname": "New York",
+        "shortDisplayName": "Rangers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "OTT",
+        "alternateColor": "b79257",
+        "color": "dd1a32",
+        "displayName": "Ottawa Senators",
+        "id": "14",
+        "isActive": true,
+        "location": "Ottawa",
+        "nickname": "Ottawa",
+        "shortDisplayName": "Senators"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "PHI",
+        "alternateColor": "000000",
+        "color": "fe5823",
+        "displayName": "Philadelphia Flyers",
+        "id": "15",
+        "isActive": true,
+        "location": "Philadelphia",
+        "nickname": "Philadelphia",
+        "shortDisplayName": "Flyers"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "PIT",
+        "alternateColor": "fdb71a",
+        "color": "000000",
+        "displayName": "Pittsburgh Penguins",
+        "id": "16",
+        "isActive": true,
+        "location": "Pittsburgh",
+        "nickname": "Pittsburgh",
+        "shortDisplayName": "Penguins"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "SJ",
+        "alternateColor": "070707",
+        "color": "00788a",
+        "displayName": "San Jose Sharks",
+        "id": "18",
+        "isActive": true,
+        "location": "San Jose",
+        "nickname": "San Jose",
+        "shortDisplayName": "Sharks"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "SEA",
+        "alternateColor": "a3dce4",
+        "color": "000d33",
+        "displayName": "Seattle Kraken",
+        "id": "124292",
+        "isActive": true,
+        "location": "Seattle",
+        "nickname": "Seattle",
+        "shortDisplayName": "Kraken"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "STL",
+        "alternateColor": "fdb71a",
+        "color": "0070b9",
+        "displayName": "St. Louis Blues",
+        "id": "19",
+        "isActive": true,
+        "location": "St. Louis",
+        "nickname": "St. Louis",
+        "shortDisplayName": "Blues"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "TB",
+        "alternateColor": "ffffff",
+        "color": "003e7e",
+        "displayName": "Tampa Bay Lightning",
+        "id": "20",
+        "isActive": true,
+        "location": "Tampa Bay",
+        "nickname": "Tampa Bay",
+        "shortDisplayName": "Lightning"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "TOR",
+        "alternateColor": "ffffff",
+        "color": "003e7e",
+        "displayName": "Toronto Maple Leafs",
+        "id": "21",
+        "isActive": true,
+        "location": "Toronto",
+        "nickname": "Toronto",
+        "shortDisplayName": "Maple Leafs"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "UTAH",
+        "alternateColor": "7ab2e1",
+        "color": "000000",
+        "displayName": "Utah Mammoth",
+        "id": "129764",
+        "isActive": true,
+        "location": "Utah",
+        "nickname": "Utah",
+        "shortDisplayName": "Mammoth"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "VAN",
+        "alternateColor": "008752",
+        "color": "003e7e",
+        "displayName": "Vancouver Canucks",
+        "id": "22",
+        "isActive": true,
+        "location": "Vancouver",
+        "nickname": "Vancouver",
+        "shortDisplayName": "Canucks"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "VGK",
+        "alternateColor": "b4975a",
+        "color": "344043",
+        "displayName": "Vegas Golden Knights",
+        "id": "37",
+        "isActive": true,
+        "location": "Vegas",
+        "nickname": "Vegas",
+        "shortDisplayName": "Golden Knights"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "WSH",
+        "alternateColor": "0b1f41",
+        "color": "d71830",
+        "displayName": "Washington Capitals",
+        "id": "23",
+        "isActive": true,
+        "location": "Washington",
+        "nickname": "Washington",
+        "shortDisplayName": "Capitals"
+       }
+      },
+      {
+       "team": {
+        "abbreviation": "WPG",
+        "alternateColor": "c41230",
+        "color": "002d62",
+        "displayName": "Winnipeg Jets",
+        "id": "28",
+        "isActive": true,
+        "location": "Winnipeg",
+        "nickname": "Winnipeg",
+        "shortDisplayName": "Jets"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

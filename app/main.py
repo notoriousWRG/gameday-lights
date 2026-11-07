@@ -183,7 +183,7 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
         if cfg.web.enabled:
             app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
                              dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
-                             settings=service)
+                             settings=service, espn=client)
             tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
         await run_tasks(tasks)
     finally:

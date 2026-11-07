@@ -13,10 +13,10 @@ Each group ends with a review stop. Cards live in `cards/NN-<slug>.md`.
 - [x] **G7 Runtime**: C12 `app/dispatch/dispatcher.py`; C13 `app/watcher.py`
 - [x] **G8 Ship it**: C14 `app/main.py`; C15 systemd unit + README run section; C16 sync ARCHITECTURE.md
 
-- [x] **G9 Status page** (Phase 2, first piece): C18 `[web]` config; C19 store queries; C20 watcher stats + bulb `ping`; C21 `app/web/status.py`; C22 Pulse button; C23 consolidated Schedule card; C24 Scoreboard card; C25 multi-team Schedule
+- [x] **G9 Status page** (Phase 2, first piece): C18 `[web]` config; C19 store queries; C20 watcher stats + bulb `ping`; C21 `app/web/status.py`; C22 Pulse button; C23 consolidated Schedule card; C24 Scoreboard card; C33 next game per followed team; C25 multi-team Schedule
 
 - [x] **G10 Settings foundation** (no UI): C26 `app/settings.py` shared validation for settings sections (TOML seed and API use the same rules); C27 `app/store.py` schema v3: `settings` (section, revision, JSON) and `settings_history`; optimistic revisions; C28 `app/settings_service.py`: seed from `config.toml` on first start, assemble the current `Config` snapshot, `config export`/`import`; C29 live apply: Watcher, Dispatcher, planner and web read a `ConfigProvider` instead of a fixed `Config`; followed teams and the bulb registry reconcile when settings change; C30 settings API: `GET /api/settings`, `PUT /api/settings/{section}` (`If-Match`, `X-Gameday`, 422 with field errors, 409 stale), `GET /api/settings/history`
-- [ ] **G11 Teams flow**: C31 `GET /api/teams/search?league=&q=` (ESPN team list, cached, colors included); C32 page nav and Teams screen: followed teams (remove, bulbs, colors), search and follow, save with field errors; following triggers a schedule sync, so the Schedule filter appears
+- [x] **G11 Teams flow**: C31 `GET /api/teams/search?league=&q=` (ESPN team list, cached, colors included); C32 page nav and Teams screen: followed teams (remove, bulbs, colors), search and follow, save with field errors; following triggers a schedule sync, so the Schedule filter appears
 - [ ] **G12 Settings, Effects, Advanced screens**: delay, effect pattern with the Test button (the Pulse path), Advanced timings; later quiet hours, brightness cap, Hold
 - [ ] **G13 Bulbs screen**: discover, add by IP, name, signing key (write-only), ping and test
 

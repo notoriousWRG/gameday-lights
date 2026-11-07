@@ -122,3 +122,28 @@ def parse_scoreboard_game(event: dict) -> dict:
         "venue": venue.get("fullName"),
         "situation": _situation(comp, abbr_by_id),
     }
+
+
+def parse_team_list(data: dict) -> list[dict]:
+    """Active teams from ESPN's team-list response, sorted by name, colors as #rrggbb or None."""
+
+    def hex_color(value) -> str | None:
+        v = (value or "").strip().lstrip("#").lower()
+        return f"#{v}" if len(v) == 6 and all(c in "0123456789abcdef" for c in v) else None
+
+    out = []
+    for sport in data.get("sports", []):
+        for league in sport.get("leagues", []):
+            for entry in league.get("teams", []):
+                t = entry.get("team", entry)
+                if t.get("isActive") is False or t.get("id") is None or not t.get("abbreviation"):
+                    continue
+                out.append({
+                    "id": str(t["id"]),
+                    "abbr": t["abbreviation"],
+                    "name": t.get("displayName") or t["abbreviation"],
+                    "short_name": t.get("shortDisplayName") or t.get("nickname"),
+                    "color": hex_color(t.get("color")),
+                    "alt_color": hex_color(t.get("alternateColor")),
+                })
+    return sorted(out, key=lambda t: t["name"].lower())
