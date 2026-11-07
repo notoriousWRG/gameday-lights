@@ -34,12 +34,21 @@ def resolve_pattern(
     return build_pattern(effect, primary, alternate)
 
 
+def _provider(config: Config | Callable[[], Config]) -> Callable[[], Config]:
+    """A Config, or a function returning the current one (settings edits apply live)."""
+    return config if callable(config) else (lambda: config)
+
+
 def make_planner(
-    config: Config, team_colors: dict[tuple[str, str], tuple[Color, Color]], store: Store
+    config: Config | Callable[[], Config],
+    team_colors: dict[tuple[str, str], tuple[Color, Color]],
+    store: Store,
 ) -> Planner:
-    """Event -> (pattern, bulb names), from config plus ESPN team colors."""
+    """Event -> (pattern, bulb names), from the current config plus ESPN team colors."""
+    current = _provider(config)
 
     def plan(event: Event) -> tuple[Pattern, list[str]]:
+        config = current()
         game = store.get_game(event.game_id)
         if game is None:
             raise LookupError(f"unknown game {event.game_id}")
@@ -54,6 +63,26 @@ def make_planner(
     return plan
 
 
+def make_bulb_pulse(
+    config: Config | Callable[[], Config],
+    team_colors: dict[tuple[str, str], tuple[Color, Color]],
+) -> Callable[[str], Pattern]:
+    """Bulb name -> the pattern a pulse check plays: the first team using it, else the default."""
+    current = _provider(config)
+
+    def pattern_for(bulb: str) -> Pattern:
+        config = current()
+        for team in config.teams:
+            if bulb in team.bulbs:
+                primary, alternate = team_colors.get(
+                    (team.league, team.id), ((0, 255, 0), (255, 255, 255))
+                )
+                return resolve_pattern(config, team, primary, alternate)
+        return build_pattern(config.score_effect, (0, 255, 0), (255, 255, 255))
+
+    return pattern_for
+
+
 class Dispatcher:
     def __init__(
         self,
@@ -65,7 +94,7 @@ class Dispatcher:
         dry_run: bool = False,
     ) -> None:
         self._store = store
-        self._bulbs = bulbs
+        self._bulbs = dict(bulbs)
         self._planner = planner
         self._now = now
         self._sleep = sleep
@@ -73,11 +102,35 @@ class Dispatcher:
         self._locks = {name: asyncio.Lock() for name in bulbs}
         self._tasks: set[asyncio.Task] = set()
 
+    @property
+    def bulbs(self) -> dict[str, BulbAdapter]:
+        return self._bulbs
+
+    def set_bulbs(self, bulbs: dict[str, BulbAdapter]) -> None:
+        """Swap the bulb registry (settings changed). A bulb that stays keeps its lock, so its
+        serial queue is unbroken; effects already playing finish on the adapter they began on."""
+        self._locks = {
+            name: self._locks[name]
+            if name in self._locks and self._bulbs.get(name) is adapter else asyncio.Lock()
+            for name, adapter in bulbs.items()
+        }
+        self._bulbs = dict(bulbs)
+
     def schedule(self, event: Event) -> asyncio.Task:
         task = asyncio.get_running_loop().create_task(self._run(event))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+    async def play_now(self, bulb_name: str, pattern: Pattern) -> datetime:
+        """Play a pattern on one bulb right now (a manual pulse check); returns its start time.
+
+        Uses the same per-bulb queue and snapshot/restore as real events, so it never
+        overlaps one. Not recorded as an event.
+        """
+        if bulb_name not in self._bulbs:
+            raise KeyError(bulb_name)
+        return await self._play(bulb_name, pattern)
 
     def recover(self) -> None:
         """After a restart: past-due pending events never fire; future ones do."""

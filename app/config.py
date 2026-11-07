@@ -47,15 +47,25 @@ class TeamConfig:
 
 
 @dataclass(frozen=True)
+class WebConfig:
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8787
+    pulse_cooldown_s: float = 10.0
+    final_hold_min: float = 30.0
+
+
+@dataclass(frozen=True)
 class Config:
     general: GeneralConfig
     bulbs: tuple[BulbConfig, ...]
     teams: tuple[TeamConfig, ...]
     score_effect: EffectConfig = field(default_factory=EffectConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 def _color(table: dict, key: str, where: str):
-    if key not in table:
+    if table.get(key) in (None, ""):
         return None
     try:
         return parse_color(str(table[key]))
@@ -81,7 +91,8 @@ def _str(table: dict, key: str, where: str, required: bool = True) -> str | None
     return str(v)
 
 
-def load_config(path: str | Path) -> Config:
+def load_raw(path: str | Path) -> tuple[dict, Path]:
+    """Parse a TOML file into a plain dict (and the directory relative paths resolve against)."""
     path = Path(path)
     try:
         with path.open("rb") as f:
@@ -90,13 +101,22 @@ def load_config(path: str | Path) -> Config:
         raise ConfigError(f"config file not found: {path}") from None
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: invalid TOML: {e}") from None
+    return raw, path.resolve().parent
 
+
+def load_config(path: str | Path) -> Config:
+    return parse_config(*load_raw(path))
+
+
+def parse_config(raw: dict, base_dir: Path) -> Config:
+    """Validate a config document (TOML-shaped dict) into a Config. The one validation path:
+    the TOML file and the stored, UI-edited settings both go through it."""
     g = raw.get("general", {})
     if "dispatch_enabled" not in g or not isinstance(g["dispatch_enabled"], bool):
         raise ConfigError("general.dispatch_enabled: required true/false")
-    db = Path(str(g.get("db_path", "game-lights.db")))
+    db = Path(str(g.get("db_path", "gameday-lights.db")))
     if not db.is_absolute():
-        db = path.resolve().parent / db
+        db = base_dir / db
     general = GeneralConfig(
         dispatch_enabled=g["dispatch_enabled"],
         db_path=db,
@@ -149,4 +169,21 @@ def load_config(path: str | Path) -> Config:
     except (PatternError, ValueError) as err:
         raise ConfigError(f"effects.score: {err}") from None
 
-    return Config(general, tuple(bulbs), tuple(teams), effect)
+    w = raw.get("web", {})
+    enabled = w.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ConfigError("web.enabled: must be true or false")
+    host = str(w.get("host", "127.0.0.1")).strip()
+    if not host:
+        raise ConfigError("web.host: must not be empty")
+    port = w.get("port", 8787)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ConfigError("web.port: must be an integer 1-65535")
+
+    cooldown = _num(w, "pulse_cooldown_s", 10, "web", 1)
+    final_hold = _num(w, "final_hold_min", 30, "web", 0)
+
+    return Config(
+        general, tuple(bulbs), tuple(teams), effect,
+        WebConfig(enabled, host, port, cooldown, final_hold),
+    )

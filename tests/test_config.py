@@ -31,7 +31,7 @@ def test_example_loads():
     assert cfg.bulbs[0].mac == "cc4085e692f4"
     assert cfg.teams[0].color == (0, 255, 0)
     assert cfg.teams[0].alt_color == (255, 182, 18)
-    assert cfg.general.db_path == ROOT / "game-lights.db"
+    assert cfg.general.db_path == ROOT / "gameday-lights.db"
 
 
 def test_defaults(tmp_path):
@@ -88,3 +88,32 @@ def test_missing_and_invalid_file(tmp_path):
         load_config(tmp_path / "nope.toml")
     with pytest.raises(ConfigError, match="invalid TOML"):
         load_config(write(tmp_path, "[[[bad"))
+
+
+def test_web_defaults_and_override(tmp_path):
+    assert load_config(write(tmp_path, BASE)).web.host == "127.0.0.1"
+    web = '[web]\nenabled = false\nhost = "192.168.0.20"\nport = 9000\n'
+    cfg = load_config(write(tmp_path, BASE + web))
+    assert (cfg.web.enabled, cfg.web.host, cfg.web.port) == (False, "192.168.0.20", 9000)
+
+
+@pytest.mark.parametrize("body,needle", [
+    ('port = 0', "web.port"), ('port = "80"', "web.port"), ('port = 70000', "web.port"),
+    ('host = ""', "web.host"), ('enabled = "yes"', "web.enabled"),
+    ('pulse_cooldown_s = 0', "pulse_cooldown_s"), ('final_hold_min = -1', "final_hold_min"),
+])
+def test_web_rules(tmp_path, body, needle):
+    with pytest.raises(ConfigError, match=needle):
+        load_config(write(tmp_path, BASE + f"[web]\n{body}\n"))
+
+
+def test_pulse_cooldown_default_and_override(tmp_path):
+    assert load_config(write(tmp_path, BASE)).web.pulse_cooldown_s == 10
+    cfg = load_config(write(tmp_path, BASE + "[web]\npulse_cooldown_s = 3\n"))
+    assert cfg.web.pulse_cooldown_s == 3
+
+
+def test_final_hold_default_and_override(tmp_path):
+    assert load_config(write(tmp_path, BASE)).web.final_hold_min == 30
+    cfg = load_config(write(tmp_path, BASE + "[web]\nfinal_hold_min = 0\n"))
+    assert cfg.web.final_hold_min == 0

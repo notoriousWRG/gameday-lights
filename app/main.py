@@ -1,4 +1,4 @@
-"""game-lights CLI: run | run --replay DIR | discover | test-effect."""
+"""gameday-lights CLI: run | run --replay DIR | discover | test-effect."""
 
 from __future__ import annotations
 
@@ -13,15 +13,32 @@ from datetime import datetime, timedelta
 
 from app.bulbs.base import BulbAdapter, DryRunBulb
 from app.bulbs.wiz import WizBulb
-from app.config import Config, ConfigError, TeamConfig, load_config
-from app.dispatch.dispatcher import Dispatcher, make_planner, resolve_pattern, utc_now
+from app.config import (
+    BulbConfig,
+    Config,
+    ConfigError,
+    TeamConfig,
+    load_config,
+    load_raw,
+    parse_config,
+)
+from app.dispatch.dispatcher import (
+    Dispatcher,
+    make_bulb_pulse,
+    make_planner,
+    resolve_pattern,
+    utc_now,
+)
 from app.espn.client import EspnClient, EspnError
 from app.espn.replay import ReplayClient
 from app.espn.schedule import parse_team_colors
+from app.settings import machine_raw_from_config
+from app.settings_service import SettingsService
 from app.store import Store
 from app.watcher import Watcher
+from app.web.status import create_app, serve_status
 
-log = logging.getLogger("game-lights")
+log = logging.getLogger("gameday-lights")
 
 
 class VirtualClock:
@@ -37,14 +54,52 @@ class VirtualClock:
         await asyncio.sleep(seconds / self._speed)
 
 
-def make_bulbs(cfg: Config, dry: bool, sleep=asyncio.sleep) -> dict[str, BulbAdapter]:
+def make_bulb(b: BulbConfig, dry: bool, sleep=asyncio.sleep) -> BulbAdapter:
     if dry:
-        return {b.name: DryRunBulb(b.name, sleep=sleep) for b in cfg.bulbs}
+        return DryRunBulb(b.name, sleep=sleep)
+    return WizBulb(b.name, b.ip, mac=b.mac, port=b.port, signing_key=b.signing_key, sleep=sleep)
+
+
+def make_bulbs(cfg: Config, dry: bool, sleep=asyncio.sleep) -> dict[str, BulbAdapter]:
+    return {b.name: make_bulb(b, dry, sleep) for b in cfg.bulbs}
+
+
+def reconcile_bulbs(
+    existing: dict[str, BulbAdapter], old: Config, new: Config, dry: bool, sleep=asyncio.sleep
+) -> dict[str, BulbAdapter]:
+    """The bulb registry for new settings: a bulb whose settings did not change keeps its adapter
+    (and so its state and queue); changed and new bulbs get fresh ones; removed ones go."""
+    before = {b.name: b for b in old.bulbs}
     return {
-        b.name: WizBulb(b.name, b.ip, mac=b.mac, port=b.port, signing_key=b.signing_key,
-                        sleep=sleep)
-        for b in cfg.bulbs
+        b.name: existing[b.name]
+        if b.name in existing and before.get(b.name) == b else make_bulb(b, dry, sleep)
+        for b in new.bulbs
     }
+
+
+def open_settings(config_path: str) -> tuple[SettingsService, Store]:
+    """Open the database and the stored settings. The first start seeds them from config.toml;
+    after that the stored settings win and a differing file is only reported."""
+    raw, base_dir = load_raw(config_path)
+    toml_cfg = parse_config(raw, base_dir)
+    store = Store(toml_cfg.general.db_path)
+    try:
+        service = SettingsService(store, machine_raw_from_config(toml_cfg), base_dir)
+        seeded = service.seed(toml_cfg)
+        if seeded:
+            log.info("imported %s from %s into the database", ", ".join(seeded), config_path)
+        else:
+            differing = service.diverged(toml_cfg)
+            if differing:
+                log.warning(
+                    "%s differs from the stored settings for: %s. The stored settings are used; "
+                    "run `gameday-lights config import --force` to take the file's values instead.",
+                    config_path, ", ".join(differing))
+        service.load()
+    except BaseException:
+        store.close()
+        raise
+    return service, store
 
 
 async def fetch_team_colors(cfg: Config, client) -> dict:
@@ -56,6 +111,21 @@ async def fetch_team_colors(cfg: Config, client) -> dict:
             log.warning("no ESPN colors for %s/%s (%s); config colors or defaults apply",
                         t.league, t.abbr, e)
     return colors
+
+
+async def run_tasks(tasks: list[asyncio.Future]) -> None:
+    """Run tasks together; on exit or cancel, cancel the rest and wait for their cleanup.
+
+    Plain gather() re-raises the first cancellation immediately and abandons the other
+    tasks mid-shutdown (e.g. the status server).
+    """
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for t in tasks:
+            if not t.done() and t.cancelling() == 0:  # a second cancel would abort its cleanup
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def run_until_signal(coro: Coroutine) -> None:
@@ -75,24 +145,53 @@ def run_until_signal(coro: Coroutine) -> None:
     asyncio.run(wrapper())
 
 
-async def run_live(cfg: Config, dry_run: bool) -> None:
+def make_live_apply(watcher, dispatcher, colors: dict, client, dry: bool, tasks: set):
+    """The settings subscriber: pushes an edit into the running watcher and dispatcher."""
+
+    async def refresh_colors(cfg: Config) -> None:
+        colors.update(await fetch_team_colors(cfg, client))
+
+    def apply(old: Config, new: Config) -> None:
+        watcher.on_config_changed(old, new)
+        if old.bulbs != new.bulbs:
+            dispatcher.set_bulbs(reconcile_bulbs(dispatcher.bulbs, old, new, dry))
+        if old.teams != new.teams:  # ESPN colors for a team that was just followed
+            task = asyncio.ensure_future(refresh_colors(new))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    return apply
+
+
+async def run_live(service: SettingsService, store: Store, dry_run: bool) -> None:
+    cfg = service.config
     dry = dry_run or not cfg.general.dispatch_enabled
     log.info("starting: %d team(s), %d bulb(s), %s", len(cfg.teams), len(cfg.bulbs),
              "DRY-RUN (no bulb commands)" if dry else "dispatch ENABLED")
     client = EspnClient()
-    store = Store(cfg.general.db_path)
     dispatcher = None
+    background: set[asyncio.Future] = set()
+    current = lambda: service.config  # noqa: E731  (edits apply to the running server)
     try:
         colors = await fetch_team_colors(cfg, client)
-        dispatcher = Dispatcher(store, make_bulbs(cfg, dry), make_planner(cfg, colors, store),
+        dispatcher = Dispatcher(store, make_bulbs(cfg, dry), make_planner(current, colors, store),
                                 dry_run=dry)
         dispatcher.recover()
-        await Watcher(cfg, store, client, dispatcher, utc_now).run()
+        watcher = Watcher(current, store, client, dispatcher, utc_now)
+        service.subscribe(make_live_apply(watcher, dispatcher, colors, client, dry, background))
+        tasks = [asyncio.ensure_future(watcher.run())]
+        if cfg.web.enabled:
+            app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
+                             dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
+                             settings=service)
+            tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
+        await run_tasks(tasks)
     finally:
+        for task in list(background):
+            task.cancel()
         if dispatcher:
             await dispatcher.aclose()
         await client.aclose()
-        store.close()
 
 
 async def run_replay(cfg: Config, directory: str, speed: float, fresh: bool) -> None:
@@ -178,8 +277,25 @@ async def _play(bulbs: dict[str, BulbAdapter], team: TeamConfig, pattern) -> Non
     await asyncio.gather(*(one(bulbs[n]) for n in team.bulbs))
 
 
+def config_command(args: argparse.Namespace, service: SettingsService) -> int:
+    if args.config_command == "export":
+        text = service.export_toml(include_secrets=not args.no_secrets)
+        if "signing_key" in text:
+            print("note: the export contains bulb signing keys; keep it private "
+                  "(or use --no-secrets)", file=sys.stderr)
+        print(text)
+        return 0
+    if not args.force:
+        print("config import overwrites the stored settings with config.toml; "
+              "pass --force to confirm", file=sys.stderr)
+        return 2
+    written = service.seed(load_config(args.config), force=True)
+    print(f"imported: {', '.join(written)}" if written else "nothing to import: already identical")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="game-lights", description=__doc__)
+    p = argparse.ArgumentParser(prog="gameday-lights", description=__doc__)
     p.add_argument("--config", default="config.toml")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
@@ -190,6 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="log effects, don't touch bulbs")
     d = sub.add_parser("discover", help="find WiZ bulbs on the LAN")
     d.add_argument("--broadcast", default="255.255.255.255")
+    c = sub.add_parser("config", help="export or re-import the stored settings")
+    csub = c.add_subparsers(dest="config_command", required=True)
+    ex = csub.add_parser("export", help="print the stored settings as config.toml text")
+    ex.add_argument("--no-secrets", action="store_true", help="leave bulb signing keys out")
+    im = csub.add_parser("import", help="replace stored settings with the values in config.toml")
+    im.add_argument("--force", action="store_true", help="required: overwrites stored settings")
     t = sub.add_parser("test-effect", help="play an effect on a team's bulbs")
     t.add_argument("effect", choices=["score"])
     t.add_argument("--team", required=True)
@@ -203,21 +325,29 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    if not args.verbose:  # httpx logs every request at INFO: one line per poll
+        logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         if args.command == "discover":
             asyncio.run(discover(args.broadcast))
             return 0
-        cfg = load_config(args.config)
-        if args.command == "run":
-            if args.replay:
-                if args.speed <= 0:
-                    print("--speed must be positive", file=sys.stderr)
-                    return 2
-                asyncio.run(run_replay(cfg, args.replay, args.speed, args.fresh))
-            else:
-                run_until_signal(run_live(cfg, args.dry_run))
+        if args.command == "run" and args.replay:
+            if args.speed <= 0:
+                print("--speed must be positive", file=sys.stderr)
+                return 2
+            asyncio.run(run_replay(load_config(args.config), args.replay, args.speed, args.fresh))
             return 0
-        return asyncio.run(test_effect(cfg, args.team, args.dry_run))
+        # run, test-effect and config use the stored settings (seeded from the file on first start)
+        service, store = open_settings(args.config)
+        try:
+            if args.command == "run":
+                run_until_signal(run_live(service, store, args.dry_run))
+                return 0
+            if args.command == "config":
+                return config_command(args, service)
+            return asyncio.run(test_effect(service.config, args.team, args.dry_run))
+        finally:
+            store.close()
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2

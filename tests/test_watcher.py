@@ -231,3 +231,272 @@ async def test_logs_window_open_and_status_changes(caplog):
         "GB FG 0->3 (g1:9:1) [pending]",
         "GB @ NE: STATUS_FINAL",
     ]
+
+
+async def test_stats_track_polls_errors_and_watching():
+    w, _, _, _, _ = build([make_board(), EspnError("down"), make_board()])
+    assert w.stats.started_at == KICKOFF
+    await w.poll_once()
+    assert (w.stats.polls, w.stats.errors, w.stats.last_error) == (1, 0, None)
+    assert w.stats.watching == ["GB @ NE"] and w.stats.last_ok_at == KICKOFF
+    await w.poll_once()
+    assert (w.stats.polls, w.stats.errors, w.stats.last_error) == (2, 1, "down")
+    await w.poll_once()
+    assert w.stats.last_error is None
+    await w.sync_schedule()
+    assert w.stats.last_sync_at is not None
+
+
+def board_with_sides(home, away, state="in", name="STATUS_IN_PROGRESS", gid="g1"):
+    return {"events": [{
+        "id": gid, "date": "2026-11-08T21:25Z", "shortName": "GB @ NE",
+        "status": {"type": {"state": state, "name": name}},
+        "competitions": [{"competitors": [
+            {"homeAway": "home", "score": str(home), "team": {"id": "17", "abbreviation": "NE"}},
+            {"homeAway": "away", "score": str(away), "team": {"id": "9", "abbreviation": "GB"}},
+        ]}],
+    }]}
+
+
+async def test_poll_records_live_then_final_score_for_both_teams():
+    w, store, _, _, _ = build([
+        board_with_sides(0, 0, state="pre", name="STATUS_SCHEDULED"),
+        board_with_sides(7, 10), board_with_sides(13, 20, "post", "STATUS_FINAL"),
+    ], start=KICKOFF - timedelta(minutes=5))
+    await w.poll_once()
+    g = store.get_game("g1")
+    assert (g.home_abbr, g.away_abbr) == ("NE", "GB") and g.home_score is None  # pre: no score
+    await w.poll_once()
+    g = store.get_game("g1")
+    assert (g.status, g.home_score, g.away_score) == ("in", 7, 10)
+    await w.poll_once()
+    g = store.get_game("g1")
+    assert (g.status, g.home_score, g.away_score) == ("post", 13, 20)
+
+
+async def test_stale_schedule_never_overwrites_live_status_or_score():
+    class Sched(FakeClient):
+        async def team_schedule(self, league, team_id, seasontype=None):
+            if seasontype == 3:
+                return {"events": []}
+            return {"events": [{
+                "id": "g1", "date": "2026-11-08T21:25Z", "shortName": "GB @ NE",
+                "competitions": [{"timeValid": True, "status": {"type": {"state": "in"}},
+                                  "competitors": [
+                    {"homeAway": "home", "score": {"displayValue": "3"},
+                     "team": {"abbreviation": "NE"}},
+                    {"homeAway": "away", "score": {"displayValue": "0"},
+                     "team": {"abbreviation": "GB"}}]}]}]}
+
+    w, store, _, _, _ = build([board_with_sides(13, 20, "post", "STATUS_FINAL")])
+    await w.poll_once()
+    w._client = Sched([])
+    await w.sync_schedule()  # cached schedule still says: in progress, 3-0
+    g = store.get_game("g1")
+    assert (g.status, g.home_score, g.away_score) == ("post", 13, 20)
+
+
+async def test_sync_fills_missing_scores_for_games_that_predate_the_migration():
+    class Sched(FakeClient):
+        async def team_schedule(self, league, team_id, seasontype=None):
+            if seasontype == 3:
+                return {"events": []}
+            return {"events": [{
+                "id": "g1", "date": "2026-11-08T21:25Z", "shortName": "GB @ NE",
+                "competitions": [{"timeValid": True, "status": {"type": {"state": "post"}},
+                                  "competitors": [
+                    {"homeAway": "home", "score": {"displayValue": "13"},
+                     "team": {"abbreviation": "NE"}},
+                    {"homeAway": "away", "score": {"displayValue": "20"},
+                     "team": {"abbreviation": "GB"}}]}]}]}
+
+    w, store, _, _, _ = build([make_board()])
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", KICKOFF, "post"))  # old row: no scores
+    w._client = Sched([])
+    await w.sync_schedule()
+    g = store.get_game("g1")
+    assert (g.home_score, g.away_score) == (13, 20)
+
+
+def rich_board(state, name, detail, gb, ne, clock="4:21", period=3):
+    b = board_with_sides(ne, gb, state, name)
+    ev = b["events"][0]
+    ev["status"].update({"displayClock": clock, "period": period})
+    ev["status"]["type"]["shortDetail"] = detail
+    return b
+
+
+async def test_live_details_and_polling_interval_are_exposed_for_the_page():
+    w, _, _, _, _ = build([
+        rich_board("pre", "STATUS_SCHEDULED", "Sun 4:25 PM", 0, 0, "0:00", 0),
+        rich_board("in", "STATUS_IN_PROGRESS", "4:21 - 3rd", 10, 7),
+        rich_board("in", "STATUS_HALFTIME", "Halftime", 10, 7, "0:00", 2),
+    ], start=KICKOFF - timedelta(minutes=5))
+    assert w.stats.poll_interval_s is None and w.stats.live == {}
+    await w.poll_once()
+    assert w.stats.poll_interval_s == 60 and w.stats.watching_ids == ["g1"]
+    assert w.stats.live["g1"]["state"] == "pre"
+    await w.poll_once()
+    g = w.stats.live["g1"]
+    assert (g["detail"], g["clock"], g["period"]) == ("4:21 - 3rd", "4:21", 3)
+    assert (g["away"]["abbr"], g["away"]["score"], g["home"]["score"]) == ("GB", 10, 7)
+    assert w.stats.poll_interval_s == 15 and g["updated_at"] == KICKOFF - timedelta(minutes=5)
+    await w.poll_once()
+    assert w.stats.live["g1"]["detail"] == "Halftime" and w.stats.poll_interval_s == 60
+
+
+async def test_final_is_kept_with_ended_at_and_polling_stops():
+    w, _, _, _, clock = build([
+        rich_board("in", "STATUS_IN_PROGRESS", "0:03 - 4th", 20, 13, "0:03", 4),
+        rich_board("post", "STATUS_FINAL", "Final", 20, 13, "0:00", 4),
+    ])
+    await w.poll_once()
+    assert w.stats.live["g1"]["ended_at"] is None
+    await w.poll_once()
+    ended = w.stats.live["g1"]["ended_at"]
+    assert w.stats.live["g1"]["state"] == "post" and ended == KICKOFF
+    clock.t += timedelta(minutes=10)
+    await w.poll_once()  # the game left its window: no HTTP, no polling, final kept
+    assert w.stats.poll_interval_s is None and w.stats.watching_ids == []
+    assert w.stats.live["g1"]["ended_at"] == ended
+
+
+async def test_old_finals_are_pruned():
+    w, _, _, _, clock = build([rich_board("post", "STATUS_FINAL", "Final", 20, 13, "0:00", 4)])
+    await w.poll_once()
+    clock.t += timedelta(hours=25)
+    await w.poll_once()
+    assert w.stats.live == {}
+
+
+# --- live apply: settings change while running -----------------------------------------------
+
+class Live:
+    """A mutable current config, like SettingsService.config."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def __call__(self):
+        return self.cfg
+
+
+def two_team_board(gb, ne, state="in", name="STATUS_IN_PROGRESS"):
+    b = board_with_sides(ne, gb, state, name)
+    b["events"][0]["competitions"][0]["competitors"][0]["team"]["id"] = "17"
+    return b
+
+
+def live_build(frames, teams=("GB",), start=KICKOFF):
+    from dataclasses import replace
+
+    store = Store()
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", KICKOFF, "pre", "NE", None, "GB", None))
+    clock = Clock(start)
+    base = config()
+    team = {
+        "GB": base.teams[0],
+        "NE": TeamConfig("nfl", "17", "NE", ("a",)),
+    }
+    live = Live(replace(base, teams=tuple(team[t] for t in teams)))
+    disp = Dispatcher(store, {"a": DryRunBulb("a", sleep=clock.sleep)},
+                      make_planner(live, {}, store), clock.now, clock.sleep, dry_run=True)
+    watcher = Watcher(live, store, FakeClient(frames), disp, clock.now, clock.sleep)
+    return watcher, store, live, disp
+
+
+async def test_delay_edit_applies_to_the_next_event_without_a_restart():
+    from dataclasses import replace
+
+    w, store, live, _ = live_build([board_with_sides(0, 0), board_with_sides(0, 7),
+                                    board_with_sides(0, 14)])
+    await w.poll_once()
+    await w.poll_once()
+    first = store.get_event("g1:9:1")
+    assert first.due_at - first.detected_at == timedelta(seconds=45)
+    live.cfg = replace(live.cfg, general=replace(live.cfg.general, delay_s=20))
+    await w.poll_once()
+    second = store.get_event("g1:9:2")
+    assert second.due_at - second.detected_at == timedelta(seconds=20)
+
+
+async def test_team_followed_mid_game_baselines_first_then_fires_on_the_next_score():
+    from dataclasses import replace
+
+    frames = [two_team_board(0, 0), two_team_board(0, 3), two_team_board(0, 10)]
+    w, store, live, _ = live_build(frames, teams=("GB",))
+    await w.poll_once()  # only GB followed
+    live.cfg = replace(live.cfg, teams=(*live.cfg.teams, TeamConfig("nfl", "17", "NE", ("a",))))
+    await w.poll_once()  # NE followed now, already at 3: baselined, nothing fires for it
+    assert keys(store) == []
+    await w.poll_once()  # NE scores again (3 -> 10): this one fires
+    assert keys(store) == ["g1:17:1"]
+    assert store.get_event("g1:17:1").detail["delta"] == 7
+
+
+async def test_unfollowed_team_stops_firing_and_is_baselined_again_when_followed_back():
+    from dataclasses import replace
+
+    frames = [two_team_board(0, 0), two_team_board(0, 3), two_team_board(0, 6),
+              two_team_board(0, 9), two_team_board(0, 16)]
+    w, store, live, _ = live_build(frames, teams=("GB", "NE"))
+    both = live.cfg
+    await w.poll_once()
+    await w.poll_once()
+    assert keys(store) == ["g1:17:1"]  # NE 0 -> 3 fired
+    live.cfg = replace(both, teams=(both.teams[0],))  # unfollow NE
+    await w.poll_once()
+    assert keys(store) == ["g1:17:1"]  # NE 3 -> 6 while unfollowed: nothing
+    live.cfg = both  # follow NE again
+    await w.poll_once()  # NE is at 9 now: baselined afresh; the gap is recorded, never fired
+    assert keys(store) == ["g1:17:1", "g1:17:2"]
+    assert store.get_event("g1:17:2").status == "skipped_restart"
+    await w.poll_once()  # 9 -> 16: a real score again
+    assert keys(store) == ["g1:17:1", "g1:17:2", "g1:17:3"]
+    assert store.get_event("g1:17:3").status == "pending"
+
+
+async def test_games_of_teams_nobody_follows_are_not_polled():
+    w, store, live, _ = live_build([two_team_board(0, 0)], teams=("GB",))
+    store.upsert_game(Game("g1", "nfl", "BUF @ MIA", KICKOFF, "pre", "MIA", None, "BUF", None))
+    assert await w.poll_once() == 60
+    assert w._client.calls == 0  # g1 is now a game neither GB nor NE... of nobody followed
+
+
+async def test_on_config_changed_requests_a_sync_only_when_followed_teams_change():
+    from dataclasses import replace
+
+    w, _, live, _ = live_build([two_team_board(0, 0)])
+    old = live.cfg
+    w.on_config_changed(old, replace(old, general=replace(old.general, delay_s=5)))
+    assert w._sync_requested is False
+    followed_ne = (*old.teams, TeamConfig("nfl", "17", "NE", ("a",)))
+    w.on_config_changed(old, replace(old, teams=followed_ne))
+    assert w._sync_requested is True
+
+
+async def test_run_loop_wakes_from_a_long_sleep_to_sync_a_newly_followed_team():
+    class Counting(FakeClient):
+        syncs = 0
+
+        async def team_schedule(self, league, team_id, seasontype=None):
+            if seasontype is None:
+                self.syncs += 1
+            return {"events": []}
+
+    w, _, live, _ = live_build([two_team_board(0, 0)])
+    w._client = Counting([])
+
+    async def long_sleep(seconds):
+        await asyncio.sleep(3600)  # an idle poll interval
+
+    w._sleep = long_sleep
+    task = asyncio.ensure_future(w.run())
+    await asyncio.sleep(0.05)
+    assert w._client.syncs == 1  # the startup sync, now asleep for an hour
+    w.request_sync()
+    await asyncio.sleep(0.05)
+    assert w._client.syncs == 2  # woke up and synced right away
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

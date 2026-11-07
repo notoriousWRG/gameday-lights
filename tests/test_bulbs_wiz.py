@@ -32,6 +32,11 @@ class FakeLight:
         self._check()
         self.sent.append(("off",))
 
+    async def send(self, msg):
+        self._check()
+        self.sent.append(("send", msg["method"]))
+        return {"result": {"state": True}}
+
     async def updateState(self):
         self._check()
         return [self.st]
@@ -103,3 +108,13 @@ async def test_flash_sends_each_step():
     bulb._sleep = nosleep
     await bulb.flash(Pattern((Step((0, 255, 0), 0.6), Step((255, 182, 18), 0.6))))
     assert len(lights[0].sent) == 2
+
+
+async def test_ping_reads_only_and_never_rediscovers():
+    bulb, lights = make(dead=())
+    assert await bulb.ping() is not None
+    assert lights[0].sent == [("send", "getPilot")]
+    found = [SimpleNamespace(ip="2.2.2.2", mac="cc4085e692f4")]
+    dead, lights = make(found=found)
+    assert await dead.ping() is None
+    assert dead.ip == "1.1.1.1" and len(lights) == 1  # no rediscovery from a ping

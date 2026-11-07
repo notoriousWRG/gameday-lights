@@ -1,11 +1,11 @@
-# Game Lights: rules for Claude
+# Gameday Lights: rules for Claude
 
 Read `intent.md` (vision), `PLAN.md` (card queue), `DECISIONS.md` (settled choices) before working.
 
 ## Commands
 - Tests: `uv run pytest`
 - Lint: `uv run ruff check`
-- Run: `uv run game-lights run`
+- Run: `uv run gameday-lights run`
 
 ## Rules
 - Every ESPN call goes through `app/espn/client.py`; never call ESPN from anywhere else.

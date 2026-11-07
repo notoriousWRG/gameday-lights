@@ -1,7 +1,7 @@
 # Card: CLI and wiring
 
 **Target files:** app/main.py, app/dispatch/dispatcher.py (add `resolve_pattern`, reused by `make_planner`), app/espn/replay.py (add `start_time`), tests/test_main.py
-**Goal:** `game-lights` CLI wiring everything together: `run`, `run --replay DIR`, `discover`, `test-effect score --team GB`.
+**Goal:** `gameday-lights` CLI wiring everything together: `run`, `run --replay DIR`, `discover`, `test-effect score --team GB`.
 
 ## Context to read (read-only)
 - app/config.py, app/watcher.py, app/dispatch/dispatcher.py, app/bulbs/wiz.py, app/espn/client.py, app/espn/replay.py

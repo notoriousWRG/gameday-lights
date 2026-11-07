@@ -162,3 +162,81 @@ async def test_planner_failure_marks_failed():
     d.schedule(e)
     await d.wait_idle()
     assert store.get_event(e.dedupe_key).status == "failed"
+
+
+async def test_play_now_queues_behind_an_event_and_is_not_an_event():
+    store, clock, log, d = setup()
+    e = event(due_in=0)
+    store.insert_event(e)
+    d.schedule(e)
+    await d.play_now("a", PATTERN)
+    await d.wait_idle()
+    assert [x[1] for x in log] == ["snapshot", "set", "set", "restore"] * 2  # never interleaved
+    assert len(store.recent_events(10)) == 1
+
+
+async def test_play_now_unknown_bulb():
+    _, _, _, d = setup()
+    with pytest.raises(KeyError):
+        await d.play_now("zzz", PATTERN)
+
+
+def test_make_bulb_pulse_uses_team_pattern_else_default():
+    from app.dispatch.dispatcher import make_bulb_pulse
+
+    pulse = make_bulb_pulse(config(color=(1, 2, 3)), {("nfl", "9"): ((9, 9, 9), (8, 8, 8))})
+    assert pulse("a").steps[0].color == (1, 2, 3)  # team's config color wins
+    assert pulse("unused-bulb").steps[0].color == (0, 255, 0)  # default effect
+
+
+# --- live apply -------------------------------------------------------------------------------
+
+def test_planner_reads_the_current_config_each_time():
+    from dataclasses import replace
+
+    store = Store()
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
+    cfg_a = config(color=(1, 2, 3))
+    box = {"cfg": cfg_a}
+    plan = make_planner(lambda: box["cfg"], {}, store)
+    assert plan(event())[0].steps[0].color == (1, 2, 3)
+    team = replace(cfg_a.teams[0], color=(9, 9, 9))
+    box["cfg"] = replace(cfg_a, teams=(team,))  # a settings edit, no restart
+    assert plan(event())[0].steps[0].color == (9, 9, 9)
+
+
+async def test_set_bulbs_swaps_the_registry_keeps_the_queue_for_staying_bulbs():
+    store, clock, log, d = setup(bulbs=("a",))
+    keep = d.bulbs["a"]
+    lock_before = d._locks["a"]
+    fresh = Recorder("b", log)
+    d.set_bulbs({"a": keep, "b": fresh})
+    assert set(d.bulbs) == {"a", "b"}
+    assert d._locks["a"] is lock_before  # the same serial queue
+    assert d._locks["b"] is not lock_before
+    replacement = Recorder("a", log)  # same name, different adapter (e.g. its IP changed)
+    d.set_bulbs({"a": replacement})
+    assert set(d.bulbs) == {"a"} and d._locks["a"] is not lock_before
+
+
+async def test_removed_bulb_fails_the_event_instead_of_crashing():
+    store, clock, log, d = setup(bulbs=("a",))
+    d.set_bulbs({})
+    e = event(due_in=0)
+    store.insert_event(e)
+    d.schedule(e)
+    await d.wait_idle()
+    assert store.get_event(e.dedupe_key).status == "failed"
+
+
+async def test_effects_stay_serial_across_a_registry_swap():
+    store, clock, log, d = setup(bulbs=("a",))
+    keep = d.bulbs["a"]
+    for n in (1, 2):
+        e = event(n, due_in=0)
+        store.insert_event(e)
+        d.schedule(e)
+    await asyncio.sleep(0)  # the first effect is under way
+    d.set_bulbs({"a": keep})  # a settings edit that leaves this bulb alone
+    await d.wait_idle()
+    assert [x[1] for x in log] == ["snapshot", "set", "set", "restore"] * 2

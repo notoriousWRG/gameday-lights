@@ -1,17 +1,19 @@
 [project]
-name = "game-lights"
+name = "gameday-lights"
 version = "0.1.0"
 description = "Pulse a smart bulb in team colors when your teams score, timed to a delayed TV picture."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.162.0",
     "httpx>=0.27",
     "pywizlight>=0.6.3",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
-game-lights = "app.main:main"
+gameday-lights = "app.main:main"
 
 [dependency-groups]
 dev = [

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -111,6 +112,15 @@ class WizBulb(BulbAdapter):
             return await fn(self._light)
         except WizLightError as second:
             raise BulbUnreachable(f"{self.name} at {self.ip}: {second}") from second
+
+    async def ping(self) -> float | None:
+        """One direct getPilot (no cache, no re-discovery); never changes the bulb."""
+        t0 = time.monotonic()
+        try:
+            resp = await self._light.send({"method": "getPilot", "params": {}})
+        except WizLightError:
+            return None
+        return time.monotonic() - t0 if resp and "result" in resp else None
 
     async def set_color(self, color: Color, brightness: int = 255) -> None:
         await self._call(lambda b: b.turn_on(PilotBuilder(rgb=color, brightness=brightness)))

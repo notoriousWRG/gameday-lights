@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gameday Lights</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --card: #ffffff; --ink: #1c2420; --muted: #66726b; --line: #dde3df;
+    --ok: #1a7f4b; --warn: #b26a00; --bad: #b3261e; --accent: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121714; --card: #1a211d; --ink: #e8eee9; --muted: #93a099; --line: #2b362f;
+            --ok: #4cc58a; --warn: #e0a24a; --bad: #f08379; --accent: #4cc58a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .wide { grid-column: 1 / -1; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px;
+          border: 1px solid currentColor; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 5px 0; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+  li:first-child { border-top: 0; }
+  .empty { color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  .tall { max-height: 380px; overflow-y: auto; }
+  .filter { display: flex; flex-wrap: wrap; gap: 6px; }
+  .filter button { padding: 2px 11px; }
+  .filter button[aria-pressed="true"] { background: var(--accent); color: var(--card); }
+  .single .teamcol { display: none; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  tr.next td { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; border-top: 0; }
+  .err { color: var(--bad); margin-top: 6px; }
+  /* scoreboard card */
+  .sb-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; margin-bottom: 8px; }
+  .sb-top h2 { margin: 0; }
+  .poll { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.off { background: var(--muted); animation: none; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+  .sb-game + .sb-game { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .sb-gamehead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 6px; }
+  .sb-detail { font-weight: 600; }
+  .sb-meta { margin-left: auto; color: var(--muted); font-size: 13px; }
+  .pill.live { color: var(--bad); }
+  table.sb { width: auto; min-width: min(100%, 420px); }
+  table.sb td, table.sb th { padding: 6px 12px; }
+  table.sb td.ls, table.sb th.ls { text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+  table.sb td.total { text-align: right; font-size: 26px; font-variant-numeric: tabular-nums; font-weight: 500; }
+  table.sb td.total.lead { font-weight: 700; }
+  table.sb td.team { font-size: 17px; }
+  table.sb td.team .abbr { font-weight: 700; }
+  table.sb td.team .rec { color: var(--muted); font-size: 13px; }
+  table.sb tr.us td.team .abbr { color: var(--accent); }
+  .poss { color: var(--warn); }
+  .sit { margin-top: 8px; font-size: 14px; }
+  .sit .rz { color: var(--bad); font-weight: 600; margin-left: 8px; }
+  .next-label { margin-bottom: 4px; }
+  .next-big { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .next-when { font-size: 16px; margin-top: 2px; }
+  .next-count { font-size: 20px; color: var(--accent); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .sb-foot { margin-top: 12px; font-size: 13px; color: var(--muted); }
+  li.bulb { flex-wrap: wrap; align-items: center; }
+  .bulb-right { display: flex; align-items: center; gap: 10px; }
+  .note { flex-basis: 100%; font-size: 13px; color: var(--muted); }
+  button { font: inherit; font-size: 13px; padding: 3px 12px; border-radius: 999px; cursor: pointer;
+           color: var(--accent); background: transparent; border: 1px solid var(--accent); }
+  button:hover:not(:disabled) { background: var(--accent); color: var(--card); }
+  button:disabled { opacity: .55; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Gameday Lights</h1>
+    <span id="mode" class="pill"></span>
+    <span id="meta" class="meta"></span>
+  </header>
+  <div class="grid">
+    <section class="card wide">
+      <div class="sb-top"><h2>Scoreboard</h2><span id="sb-poll" class="poll"></span></div>
+      <div id="scoreboard"></div>
+    </section>
+    <section class="card"><h2>Watcher</h2><div id="watcher"></div></section>
+    <section class="card"><h2>Bulbs</h2><ul id="bulbs"></ul></section>
+    <section class="card wide">
+      <div class="sb-top"><h2>Schedule</h2><div id="sched-filter" class="filter" role="group" aria-label="Filter schedule by team" hidden></div></div>
+      <div id="schedule-scroll" class="scroll tall"><table id="sched-table">
+        <thead><tr><th>Date</th><th class="teamcol">Team</th><th>Game</th><th>Result</th></tr></thead>
+        <tbody id="schedule"></tbody>
+      </table></div>
+      <p id="no-schedule" class="empty" hidden>No games yet. The schedule loads shortly after start.</p>
+    </section>
+    <section class="card wide"><h2>Recent events</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Detected</th><th>Game</th><th>Team</th><th>Score</th><th>Status</th><th>Fired after</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table></div>
+      <p id="no-events" class="empty" hidden>No scores recorded yet.</p>
+    </section>
+  </div>
+</main>
+<script>
+// Everything from the server is inserted with textContent, never as HTML.
+const $ = (id) => document.getElementById(id);
+const fmt = (iso) => iso ? new Date(iso).toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit"}) : "–";
+const ago = (iso, now) => { if (!iso) return "never"; const s = Math.round((new Date(now) - new Date(iso)) / 1000);
+  return s < 90 ? s + "s ago" : s < 5400 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago"; };
+function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
+function row(left, right, rightCls) { const li = el("li"); li.append(el("span", left), el("span", right, rightCls)); return li; }
+function fill(id, items, emptyText) { const u = $(id); u.replaceChildren(...(items.length ? items : [el("li", emptyText, "empty")])); }
+const statusCls = { fired: "ok", dry_run: "warn", failed: "bad", skipped_restart: "warn", pending: "warn" };
+
+// Pulse-button state lives outside render() so it survives the 10 s refresh.
+let lastStatus = null; const busy = {}; const notes = {}; let bulbsSig = "";
+function renderBulbs() {
+  const s = lastStatus; if (!s) return;
+  const dry = s.mode !== "live";
+  // Skip identical re-renders so a refresh never steals focus or hover from the button.
+  const sig = JSON.stringify([dry, s.bulbs, busy, Object.fromEntries(Object.entries(notes).map(([k, v]) => [k, v.text]))]);
+  if (sig === bulbsSig) return;
+  bulbsSig = sig;
+  fill("bulbs", s.bulbs.map((b) => {
+    const li = el("li", undefined, "bulb");
+    const right = el("span", undefined, "bulb-right");
+    right.append(el("span", b.ping_ms === null ? "unreachable" : `${b.ping_ms} ms`, b.ping_ms === null ? "bad" : "ok"));
+    const btn = el("button", busy[b.name] ? "Pulsing…" : (dry ? "Pulse (dry-run)" : "Pulse"));
+    btn.type = "button"; btn.disabled = !!busy[b.name];
+    btn.title = dry ? "Dry-run mode: runs the pulse without sending anything to the bulb" : "Flash this bulb with its team pattern, then restore it";
+    btn.addEventListener("click", () => pulse(b.name));
+    right.append(btn);
+    li.append(el("span", `${b.name} (${b.ip})`), right);
+    if (notes[b.name]) li.append(el("div", notes[b.name].text, "note " + notes[b.name].cls));
+    return li;
+  }), "No bulbs configured.");
+}
+async function pulse(name) {
+  busy[name] = true; delete notes[name]; renderBulbs();
+  let note;
+  try {
+    const r = await fetch(`api/bulbs/${encodeURIComponent(name)}/pulse`, {method: "POST", headers: {"X-Gameday": "1"}});
+    const body = await r.json().catch(() => ({}));
+    note = r.ok ? {text: body.dry_run ? "Dry-run: nothing was sent to the bulb." : `Pulse done (${body.duration_s}s).`, cls: "ok"}
+               : {text: body.detail || `HTTP ${r.status}`, cls: "bad"};
+  } catch (e) { note = {text: "Request failed: " + e.message, cls: "bad"}; }
+  busy[name] = false; notes[name] = note; renderBulbs();
+  setTimeout(() => { if (notes[name] === note) { delete notes[name]; renderBulbs(); } }, 8000);
+}
+
+// Schedule: every game for every followed team, one row per team's schedule (a game between two
+// followed teams appears on both). Finished = final score and W/L, live = running score,
+// upcoming = day and time. Re-rendered only when something changes so the scroll position stays put.
+const dayOf = (iso) => new Date(iso).toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"});
+const timeOf = (iso) => new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+let scheduleSig = "", scheduleFilter = "all", filterLoaded = false, lastSchedule = null, lastTeams = [];
+let aimAtNext = true;  // scroll to the next game on first load and when the filter changes, not on data refreshes
+function loadFilter() {
+  if (filterLoaded) return; filterLoaded = true;
+  try { scheduleFilter = localStorage.getItem("gl-sched-filter") || "all"; } catch (e) { /* storage blocked: fine */ }
+}
+function setFilter(key) {
+  scheduleFilter = key;
+  try { localStorage.setItem("gl-sched-filter", key); } catch (e) { /* ignore */ }
+  scheduleSig = ""; aimAtNext = true;
+  renderSchedule(lastSchedule, lastTeams);
+}
+function renderFilter(teams) {
+  const bar = $("sched-filter"), multi = teams.length > 1;
+  bar.hidden = !multi; $("sched-table").classList.toggle("single", !multi);
+  if (!multi) return;
+  const items = [{key: "all", label: "All teams"}, ...teams];
+  bar.replaceChildren(...items.map((t) => {
+    const b = el("button", t.label); b.type = "button";
+    b.setAttribute("aria-pressed", String(scheduleFilter === t.key));
+    b.addEventListener("click", () => setFilter(t.key));
+    return b;
+  }));
+}
+function renderSchedule(games, teams) {
+  lastSchedule = games; lastTeams = teams; loadFilter();
+  const multi = teams.length > 1;
+  if (!multi || (scheduleFilter !== "all" && !teams.some((t) => t.key === scheduleFilter))) scheduleFilter = "all";
+  const sig = JSON.stringify([games, teams.map((t) => t.key), scheduleFilter]);
+  $("no-schedule").hidden = games.length > 0;
+  if (sig === scheduleSig) return;
+  scheduleSig = sig;
+  renderFilter(teams);
+  const byKey = Object.fromEntries(teams.map((t) => [t.key, t]));
+  const shown = games.filter((g) => scheduleFilter === "all" || g.team_key === scheduleFilter);
+  const nextSeen = new Set(); let firstNext = null;
+  $("schedule").replaceChildren(...shown.map((g) => {
+    const tr = el("tr");
+    const game = g.us ? `${g.home ? "vs" : "@"} ${g.opp}` : g.name;
+    let result, cls = "";
+    if (g.status === "post" && g.result) { result = `${g.result} ${g.us_score}–${g.opp_score}`; cls = g.result === "W" ? "ok" : g.result === "L" ? "bad" : ""; }
+    else if (g.status === "post") { result = "Final"; }
+    else if (g.status === "in") { result = g.us_score === null ? "LIVE" : `LIVE ${g.us_score}–${g.opp_score}`; cls = "warn"; }
+    else { result = timeOf(g.start_utc); }
+    const t = byKey[g.team_key], teamCell = el("td", undefined, "teamcol");
+    if (t) { const dot = el("span", undefined, "swatch"); if (t.color) dot.style.background = t.color; teamCell.append(dot, document.createTextNode(t.label)); }
+    else teamCell.textContent = "–";
+    tr.append(el("td", dayOf(g.start_utc)), teamCell, el("td", game), el("td", result, "num " + cls));
+    // highlight each visible team's next unplayed game
+    const k = g.team_key || "";
+    if (g.status !== "post" && !nextSeen.has(k)) { nextSeen.add(k); tr.className = "next"; if (!firstNext) firstNext = tr; }
+    return tr;
+  }));
+  if (aimAtNext) {  // the next game, with a couple of rows of context above it
+    aimAtNext = false;
+    const box = $("schedule-scroll");
+    box.scrollTop = firstNext ? Math.max(0, firstNext.offsetTop - box.offsetTop - 2 * firstNext.offsetHeight) : 0;
+  }
+}
+
+// Scoreboard: live/pre/final games in their window, else the next game with a countdown.
+// serverSkew keeps the client-side countdown on the server's clock, not this machine's.
+let serverSkew = 0;
+const serverNow = () => Date.now() + serverSkew;
+const REG_PERIODS = {nfl: 4, nhl: 3};
+function periodLabel(league, i) {
+  if (league === "nfl") return i < 4 ? `Q${i + 1}` : "OT";
+  if (league === "nhl") return i < 3 ? `P${i + 1}` : (i === 3 ? "OT" : "SO");
+  return String(i + 1);
+}
+function chipFor(g) {
+  if (g.state === "pre") return ["PRE-GAME", "warn"];
+  if (g.state === "post") return ["FINAL", ""];
+  if (g.status_name === "STATUS_HALFTIME") return ["HALFTIME", "warn"];
+  if (/END_PERIOD|DELAYED|DELAY/.test(g.status_name)) return ["BREAK", "warn"];
+  return ["LIVE", "live"];
+}
+function countdownText(startIso) {
+  const s = Math.round((Date.parse(startIso) - serverNow()) / 1000);
+  if (s <= 0) return "starting now";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  return `${m}m ${String(sec).padStart(2, "0")}s`;
+}
+function tick() {  // once a second: countdowns and "last poll N s ago"
+  document.querySelectorAll("[data-start]").forEach((e) => { e.textContent = (e.dataset.prefix || "") + countdownText(e.dataset.start); });
+  document.querySelectorAll("[data-last]").forEach((e) => {
+    const s = Math.max(0, Math.round((serverNow() - Date.parse(e.dataset.last)) / 1000));
+    e.textContent = s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
+  });
+}
+function teamRow(g, side, cols, other) {
+  const t = g[side], tr = el("tr", undefined, t.us ? "us" : "");
+  const name = el("td", undefined, "team");
+  if (g.situation && g.situation.possession && g.situation.possession === t.abbr) name.append(el("span", "● ", "poss"));
+  name.append(el("span", t.abbr || "–", "abbr"));
+  if (t.record) name.append(el("span", " " + t.record, "rec"));
+  tr.append(name);
+  for (let i = 0; i < cols; i++) { const v = t.linescores[i]; tr.append(el("td", v === undefined || v === null ? "–" : String(v), "ls")); }
+  const ahead = t.score !== null && other.score !== null && t.score > other.score;
+  tr.append(el("td", t.score === null ? "–" : String(t.score), "total" + (ahead ? " lead" : "")));
+  return tr;
+}
+function gameBlock(g) {
+  const box = el("div", undefined, "sb-game"), head = el("div", undefined, "sb-gamehead");
+  const [chip, cls] = chipFor(g);
+  head.append(el("span", chip, "pill " + cls));
+  if (g.state === "in" && g.detail) head.append(el("span", g.detail, "sb-detail"));
+  if (g.state === "pre") { const c = el("span", "", "sb-detail"); c.dataset.start = g.start_utc; c.dataset.prefix = "Kickoff in "; head.append(c); }
+  const meta = [g.broadcast, g.venue].filter(Boolean).join(" · ");
+  if (meta) head.append(el("span", meta, "sb-meta"));
+  box.append(head);
+
+  const reg = REG_PERIODS[g.league] || 0;
+  const cols = g.state === "pre" ? 0 : Math.max(reg, g.home.linescores.length, g.away.linescores.length);
+  const table = el("table", undefined, "sb"), thead = el("thead"), hr = el("tr");
+  hr.append(el("th", ""));
+  for (let i = 0; i < cols; i++) hr.append(el("th", periodLabel(g.league, i), "ls"));
+  hr.append(el("th", ""));
+  thead.append(hr);
+  const tbody = el("tbody");
+  tbody.append(teamRow(g, "away", cols, g.home), teamRow(g, "home", cols, g.away));  // ESPN order: visitors on top
+  table.append(thead, tbody);
+  const wrap = el("div", undefined, "scroll"); wrap.append(table); box.append(wrap);
+
+  if (g.situation && (g.situation.text || g.situation.possession_text)) {
+    const sit = el("div", g.situation.text || g.situation.possession_text, "sit");
+    if (g.situation.red_zone) sit.append(el("span", "RED ZONE", "rz"));
+    box.append(sit);
+  }
+  return box;
+}
+function nextLine(sb) {
+  const n = sb.next; if (!n) return null;
+  const line = el("div", undefined, "sb-foot");
+  line.textContent = `Next up: ${n.us ? `${n.us} ${n.home ? "vs" : "@"} ${n.opp}` : n.name} · ${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`;
+  return line;
+}
+function renderScoreboard(sb) {
+  const p = sb.polling, poll = $("sb-poll");
+  poll.replaceChildren(el("span", undefined, p.active ? "dot" : "dot off"));
+  if (p.active) {
+    poll.append(document.createTextNode(`Polling every ${p.interval_s} s · last poll `));
+    const ago = el("span"); ago.dataset.last = p.last_poll_at; poll.append(ago);
+  } else {
+    poll.append(document.createTextNode(`Not polling · starts ${p.lead_min} min before kickoff`));
+  }
+
+  const box = $("scoreboard"), parts = [];
+  if (sb.games.length) {
+    sb.games.forEach((g) => parts.push(gameBlock(g)));
+    const nl = nextLine(sb); if (nl) parts.push(nl);
+  } else if (sb.next) {
+    const n = sb.next, wrap = el("div");
+    wrap.append(el("div", sb.next_in_week ? "THIS WEEK" : "NEXT GAME", "pill " + (sb.next_in_week ? "ok" : "") + " next-label"));
+    wrap.append(el("div", n.us ? `${n.us} ${n.home ? "vs" : "@"} ${n.opp}` : n.name, "next-big"));
+    wrap.append(el("div", `${dayOf(n.start_utc)} · ${timeOf(n.start_utc)}`, "next-when"));
+    const c = el("div", "", "next-count"); c.dataset.start = n.start_utc; c.dataset.prefix = "in "; wrap.append(c);
+    if (!sb.next_in_week) wrap.append(el("div", "No game this week.", "sb-foot"));
+    parts.push(wrap);
+  } else {
+    parts.push(el("div", "No upcoming games.", "empty"));
+  }
+  box.replaceChildren(...parts);
+  tick();
+}
+
+function render(s) {
+  const mode = $("mode");
+  mode.textContent = s.mode === "live" ? "live" : "dry-run";
+  mode.className = "pill " + (s.mode === "live" ? "ok" : "warn");
+  $("meta").textContent = `v${s.version} · up ${Math.round((s.uptime_s || 0) / 60)} min · delay ${s.delay_s}s · updated ${fmt(s.now)}`;
+
+  const w = s.watcher, box = $("watcher");
+  const lines = [
+    ["Watching", w.watching.length ? w.watching.join(", ") : "nothing right now"],
+    ["Last poll", w.last_poll_at ? ago(w.last_poll_at, s.now) : "none yet"],
+    ["Last good poll", w.last_ok_at ? ago(w.last_ok_at, s.now) : "none yet"],
+    ["Schedule sync", w.last_sync_at ? ago(w.last_sync_at, s.now) : "none yet"],
+    ["Polls / errors", `${w.polls} / ${w.errors}`],
+  ].map(([k, v]) => row(k, v));
+  const ul = el("ul"); ul.append(...lines); box.replaceChildren(ul);
+  if (w.last_error) box.append(el("div", "Last error: " + w.last_error, "err"));
+
+  lastStatus = s; renderBulbs();
+  renderSchedule(s.schedule, s.teams);
+  renderScoreboard(s.scoreboard);
+
+  $("events").replaceChildren(...s.events.map((e) => {
+    const tr = el("tr");
+    const cells = [fmt(e.detected_at), e.game, e.team, `${e.label}${e.delta ? " (+" + e.delta + ")" : ""}`,
+                   e.status, e.fire_delay_s === null ? "–" : Math.round(e.fire_delay_s) + "s"];
+    cells.forEach((c, i) => tr.append(el("td", c, i === 4 ? statusCls[e.status] : "")));
+    return tr;
+  }));
+  $("no-events").hidden = s.events.length > 0;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("api/status", {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const body = await r.json();
+    serverSkew = Date.parse(body.now) - Date.now();
+    render(body);
+  } catch (e) {
+    $("meta").textContent = "can't reach the server (" + e.message + "); retrying…";
+  }
+}
+refresh(); setInterval(refresh, 10000); setInterval(tick, 1000);
+</script>
+</body>
+</html>

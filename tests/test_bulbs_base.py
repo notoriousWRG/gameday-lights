@@ -59,3 +59,27 @@ async def test_dry_run_snapshot_restore():
     snap = await bulb.snapshot()
     await bulb.restore(snap)
     assert bulb.calls[-1] == ("restore", snap)
+
+
+async def test_ping_reachable_and_not():
+    from app.bulbs.base import BulbAdapter
+
+    class Fake(BulbAdapter):
+        def __init__(self, ok):
+            super().__init__("x")
+            self.ok = ok
+
+        async def set_color(self, color, brightness=255):
+            pass
+
+        async def snapshot(self):
+            if not self.ok:
+                raise RuntimeError("down")
+            return "s"
+
+        async def restore(self, snapshot):
+            pass
+
+    assert (await Fake(True).ping()) is not None
+    assert await Fake(False).ping() is None
+    assert await DryRunBulb("d").ping() == 0.0

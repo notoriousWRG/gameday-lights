@@ -1,16 +1,16 @@
 # Install: copy to ~/.config/systemd/user/, adjust WorkingDirectory/ExecStart if the repo
-# is not in ~/hack/game-lights, then:
-#   systemctl --user daemon-reload && systemctl --user enable --now game-lights
+# is not in ~/hack/gameday-lights, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now gameday-lights
 # To keep it running when you are logged out: loginctl enable-linger $USER
 [Unit]
-Description=Game Lights (score-triggered bulb effects)
+Description=Gameday Lights (score-triggered bulb effects)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/hack/game-lights
-ExecStart=%h/hack/game-lights/.venv/bin/game-lights --config %h/hack/game-lights/config.toml run
+WorkingDirectory=%h/hack/gameday-lights
+ExecStart=%h/hack/gameday-lights/.venv/bin/gameday-lights --config %h/hack/gameday-lights/config.toml run
 Restart=on-failure
 RestartSec=10
 # SIGTERM is handled: the process stops cleanly

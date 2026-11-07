@@ -34,13 +34,18 @@ class ScoreChange:
         return self.new - self.old
 
 
-def _score(value) -> int:
+def parse_score(value) -> int | None:
+    """ESPN scores arrive as "14", 14 or {"displayValue": "14"}; missing means None."""
     if isinstance(value, dict):
         value = value.get("displayValue", value.get("value"))
     try:
-        return int(float(value)) if value not in (None, "") else 0
+        return int(float(value)) if value not in (None, "") else None
     except (TypeError, ValueError):
-        return 0
+        return None
+
+
+def _score(value) -> int:
+    return parse_score(value) or 0
 
 
 def team_scores(scoreboard: dict, followed_ids: Iterable[str]) -> list[TeamScore]:

@@ -70,6 +70,15 @@ class BulbAdapter(ABC):
     @abstractmethod
     async def restore(self, snapshot: Any) -> None: ...
 
+    async def ping(self) -> float | None:
+        """Round-trip seconds of a read-only state query, or None if unreachable."""
+        t0 = time.monotonic()
+        try:
+            await self.snapshot()
+        except Exception:
+            return None
+        return time.monotonic() - t0
+
     async def flash(self, pattern: Pattern) -> None:
         for step in pattern.steps:
             t0 = time.monotonic()
@@ -88,6 +97,9 @@ class DryRunBulb(BulbAdapter):
     async def set_color(self, color: Color, brightness: int = 255) -> None:
         self.calls.append(("set_color", color, brightness))
         log.info("[dry-run %s] set_color %s brightness %d", self.name, color, brightness)
+
+    async def ping(self) -> float | None:
+        return 0.0
 
     async def snapshot(self) -> str:
         self.calls.append(("snapshot",))

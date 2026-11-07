@@ -1,9 +1,15 @@
 # Copy to config.toml (gitignored) and edit. Relative paths resolve against this file.
+#
+# This file is the machine's settings (database path, dispatch_enabled, the [web] address) plus
+# a starting point: on first start the bulbs, teams, effects and timings below are imported into
+# the database, and from then on the stored settings are used (edit them through the app).
+# If this file later differs, the app logs it and keeps the stored settings;
+# `gameday-lights config import --force` takes this file's values instead.
 
 [general]
 # Exactly one instance should drive a given bulb. false = log effects, don't send them.
 dispatch_enabled = true
-db_path = "game-lights.db"
+db_path = "gameday-lights.db"
 delay_s = 45             # seconds from detecting a score to firing the effect
 schedule_sync_hours = 6
 watch_lead_min = 10      # start watching this long before kickoff
@@ -28,3 +34,13 @@ alt_color = "#FFB612"
 pulses = 5               # pulse count x 2 color changes; capped at 2 changes/sec in code
 duration_s = 6.0
 brightness = 255
+
+[web]
+# Status page with a per-bulb Pulse button. Loopback by default; to view it from a phone or TV on your
+# home network, set host to this machine's LAN address (e.g. "192.168.0.20").
+# Never expose it to the internet: it has no login.
+enabled = true
+host = "127.0.0.1"
+port = 8787
+pulse_cooldown_s = 10   # minimum seconds between Pulse-button presses on one bulb
+final_hold_min = 30     # how long a finished game stays on the Scoreboard card (0 = drop at once)

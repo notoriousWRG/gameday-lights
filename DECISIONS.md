@@ -29,3 +29,19 @@ Settled during planning (2026-11-06). Phase 0 results get appended by card C03.
 | Phase 1 run | systemd --user unit on Pop!_OS; `dispatch_enabled = true` because it owns the WiZ bulb |
 
 Unconfirmed defaults (object at review): ruff as linter; stdlib dataclasses over pydantic; ESPN CDN fallback deferred to Phase 2; schedule sync every 6 h; watch window opens 10 min before kickoff; poll 15 s live and 60 s during halftime/breaks; all times UTC.
+
+## Editable settings and the UI (decided 2026-11-07)
+
+| Topic | Decision |
+|---|---|
+| Storage | **Hybrid.** `config.toml` keeps the machine: `db_path`, `dispatch_enabled`, `[web]` enabled/host/port. Everything else is household state in the SQLite database: teams, bulbs, effects, delay, and the timings (poll, sync, watch lead, pulse cooldown, final hold) |
+| `dispatch_enabled` | TOML only, never UI-editable: it is the per-instance safety that stops a dev machine from driving a bulb |
+| Seeding | On first start with no stored settings, teams, bulbs, effects and timings are imported from `config.toml`, so existing configs keep working. After that the database wins; a differing TOML section is logged and ignored. `config export` writes the stored settings back to TOML; `config import --force` re-imports |
+| Shape | One row per section (`teams`, `bulbs`, `effects`, `household`, `advanced`): validated JSON plus a revision. Edits send the revision they started from (`If-Match`); a stale one is refused (409), so two phones cannot overwrite each other. Change history is kept for review and revert |
+| Validation | One set of rules shared by the TOML seed and the UI: flash cap, poll >= 10 s, bulbs referenced by teams must exist, colors. The 10 s poll floor holds even in the Advanced section |
+| Live apply | Components read the current settings each poll or event (no restart). Edit = validate, save, swap the snapshot; effects already playing finish with the old values. Following a team triggers a schedule sync; adding a bulb creates its adapter and queue at runtime |
+| Edit access | **Trust the LAN: no login.** The status page still binds to loopback by default, so editing is only possible from this machine until `[web].host` is set to a LAN address. Every write needs the `X-Gameday: 1` header (cross-site posts cannot send it) |
+| Secrets | The bulb signing key is write-only through the API (never returned); the database file is created readable only by its owner |
+| Timings in the UI | Editable under an Advanced section, same validation |
+| Build order | Foundation (validation, settings store, live apply, settings API), then Teams, then Settings/Effects/Advanced, then Bulbs |
+
