@@ -156,8 +156,15 @@ class SettingsService:
                 b["name"] = new
         for t in teams:  # type: ignore[union-attr]
             t["bulbs"] = [new if n == old else n for n in t.get("bulbs", [])]
+            fx = t.get("fixture_effects")
+            if fx and old in fx:
+                t["fixture_effects"] = {new if k == old else k: v for k, v in fx.items()}
+        effects = copy.deepcopy(stored.get("effects", (0, {}))[1])
+        fixtures = effects.get("fixtures")  # type: ignore[union-attr]
+        if fixtures and old in fixtures:
+            effects["fixtures"] = {new if k == old else k: v for k, v in fixtures.items()}
         candidate = {name: val for name, (_, val) in stored.items()}
-        candidate.update(bulbs=bulbs, teams=teams)
+        candidate.update(bulbs=bulbs, teams=teams, effects=effects)
         new_config = build_config(self._machine, candidate, self._base_dir)
         for section, expected in (("bulbs", bulbs_revision), ("teams", teams_revision)):
             have = stored[section][0] if section in stored else 0
@@ -168,6 +175,8 @@ class SettingsService:
         normalized = sections_from_config(new_config)
         self._write("bulbs", normalized["bulbs"], bulbs_revision, source)
         self._write("teams", normalized["teams"], teams_revision, source)
+        if "effects" in stored:  # fixture layers are keyed by bulb name, so they follow the rename
+            self._write("effects", normalized["effects"], stored["effects"][0], source)
         old_config, self._config = self.config, new_config
         self._notify(old_config, new_config)
         return new_config
@@ -218,6 +227,11 @@ def _v(value: object) -> str:
     return json.dumps(str(value), ensure_ascii=False)  # a TOML basic string
 
 
+def _key(name: str) -> str:
+    """A TOML table key for a bulb name (always quoted, so spaces and dots are safe)."""
+    return json.dumps(name, ensure_ascii=False)
+
+
 def _table(header: str, fields: dict) -> list[str]:
     lines = [header]
     lines += [f"{k} = {_v(v)}" for k, v in fields.items() if v is not None]
@@ -245,8 +259,15 @@ def config_to_toml(cfg: Config, include_secrets: bool = True) -> str:
             bulb.pop(SECRET, None)
         out += _table("[[bulbs]]", bulb)
     for team in sections["teams"]:
+        layers = {k: team.pop(k) for k in ("effects", "fixture_effects") if k in team}
         out += _table("[[teams]]", team)
+        if "effects" in layers:
+            out += _table("[teams.effects]", layers["effects"])
+        for bulb, layer in layers.get("fixture_effects", {}).items():
+            out += _table(f"[teams.fixture_effects.{_key(bulb)}]", layer)
     out += _table("[effects.score]", sections["effects"]["score"])
+    for bulb, layer in sections["effects"].get("fixtures", {}).items():
+        out += _table(f"[effects.fixtures.{_key(bulb)}]", layer)
     out += _table("[web]", web)
     return "\n".join(out)
 

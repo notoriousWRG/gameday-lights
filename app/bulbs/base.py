@@ -50,11 +50,93 @@ class Pattern:
         return sum(s.hold_s for s in self.steps)
 
 
+@dataclass(frozen=True)
+class SegmentFrame:
+    colors: tuple[Color, ...]
+    hold_s: float
+
+
+@dataclass(frozen=True)
+class SegmentPattern:
+    """Frames of one color per segment. The flash cap applies per segment: a segment may not
+    change color more than MAX_CHANGES_PER_S times a second."""
+
+    frames: tuple[SegmentFrame, ...]
+    brightness: int = 255
+
+    def __post_init__(self) -> None:
+        if not self.frames:
+            raise PatternError("pattern has no frames")
+        n = len(self.frames[0].colors)
+        if n < 1:
+            raise PatternError("frame has no segments")
+        if not 1 <= self.brightness <= 255:
+            raise PatternError(f"bad brightness {self.brightness}")
+        last_change: list[float | None] = [None] * n
+        t = 0.0
+        previous: tuple[Color, ...] | None = None
+        for f in self.frames:
+            if len(f.colors) != n:
+                raise PatternError("frames have different segment counts")
+            if f.hold_s <= 0:
+                raise PatternError(f"bad frame hold {f.hold_s}")
+            for c in f.colors:
+                if len(c) != 3 or not all(0 <= v <= 255 for v in c):
+                    raise PatternError(f"bad color {c}")
+            if previous is not None:
+                for i, (a, b) in enumerate(zip(previous, f.colors, strict=True)):
+                    if a == b:
+                        continue
+                    seen = last_change[i]
+                    if seen is not None and t - seen < MIN_HOLD_S - 1e-9:
+                        raise PatternError(
+                            f"segment {i} changes color faster than the "
+                            f"{MAX_CHANGES_PER_S:g} changes/sec cap"
+                        )
+                    last_change[i] = t
+            previous = f.colors
+            t += f.hold_s
+
+    @property
+    def segments(self) -> int:
+        return len(self.frames[0].colors)
+
+    @property
+    def duration_s(self) -> float:
+        return sum(f.hold_s for f in self.frames)
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """What a fixture can do. Effect kinds outside `kinds` are never offered to it."""
+
+    kinds: frozenset[str] = frozenset({"pulse"})
+    min_hold_s: float = MIN_HOLD_S
+    segments: int = 1  # 1 = whole fixture
+    restores_scenes: bool = False
+
+    def __post_init__(self) -> None:
+        if self.min_hold_s < MIN_HOLD_S - 1e-9:
+            raise ValueError(f"min_hold_s cannot go below the {MAX_CHANGES_PER_S:g}/sec cap")
+        if self.segments < 1:
+            raise ValueError("segments must be >= 1")
+
+
+def capabilities_for(kind: str, segments: int = 1) -> Capabilities:
+    """The capabilities of a bulb kind with this many segments (config-side, no adapter needed)."""
+    kinds = {"pulse"}
+    if kind == "govee" and segments > 1:
+        kinds.add("chase")
+    return Capabilities(kinds=frozenset(kinds), segments=segments if kind == "govee" else 1)
+
+
 Sleep = Callable[[float], Awaitable[None]]
 
 
 class BulbAdapter(ABC):
     """One implementation per brand. The rest of the app only sees this."""
+
+    capabilities: Capabilities = Capabilities()
 
     def __init__(self, name: str, sleep: Sleep = asyncio.sleep) -> None:
         self.name = name
@@ -79,6 +161,16 @@ class BulbAdapter(ABC):
             return None
         return time.monotonic() - t0
 
+    async def play(self, pattern: Pattern | SegmentPattern) -> None:
+        """Play either kind of pattern; the dispatcher only calls this."""
+        if isinstance(pattern, SegmentPattern):
+            await self.play_segments(pattern)
+        else:
+            await self.flash(pattern)
+
+    async def play_segments(self, pattern: SegmentPattern) -> None:
+        raise PatternError(f"{self.name} cannot play per-segment patterns")
+
     async def flash(self, pattern: Pattern) -> None:
         for step in pattern.steps:
             t0 = time.monotonic()
@@ -90,9 +182,17 @@ class BulbAdapter(ABC):
 class DryRunBulb(BulbAdapter):
     """Logs what would happen; never touches hardware."""
 
-    def __init__(self, name: str, sleep: Sleep = asyncio.sleep) -> None:
+    def __init__(
+        self, name: str, sleep: Sleep = asyncio.sleep, capabilities: Capabilities | None = None
+    ) -> None:
         super().__init__(name, sleep)
+        if capabilities is not None:
+            self.capabilities = capabilities
         self.calls: list[tuple] = []
+
+    async def play_segments(self, pattern: SegmentPattern) -> None:
+        self.calls.append(("play_segments", len(pattern.frames), pattern.segments))
+        log.info("[dry-run %s] %d segment frames", self.name, len(pattern.frames))
 
     async def set_color(self, color: Color, brightness: int = 255) -> None:
         self.calls.append(("set_color", color, brightness))

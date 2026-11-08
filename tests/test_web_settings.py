@@ -349,10 +349,19 @@ async def test_discover_marks_known_bulbs_and_needs_the_header():
         assert (await c.post("/api/bulbs/discover")).status_code == 403
         body = (await c.post("/api/bulbs/discover", headers=H)).json()
     assert body == [
-        {"ip": "10.0.0.9", "mac": "cc4085e692f4", "known": True, "name": cfg.bulbs[0].name},
-        {"ip": "10.0.0.50", "mac": "aabbccddeeff", "known": False, "name": None},
+        {"ip": "10.0.0.9", "mac": "cc4085e692f4", "kind": "wiz", "known": True,
+         "name": cfg.bulbs[0].name},
+        {"ip": "10.0.0.50", "mac": "aabbccddeeff", "kind": "wiz", "known": False, "name": None},
     ]
     assert "signing" not in str(body)
+
+
+async def test_discover_passes_the_kind_through():
+    app, _ = make_discovering([{"ip": "10.0.0.60", "mac": "0da8de99c4c6475f", "kind": "govee"}])
+    async with client(app) as c:
+        body = (await c.post("/api/bulbs/discover", headers=H)).json()
+    assert body == [{"ip": "10.0.0.60", "mac": "0da8de99c4c6475f", "kind": "govee",
+                     "known": False, "name": None}]
 
 
 async def test_discover_failure_is_502_and_concurrent_search_is_409():
@@ -436,3 +445,38 @@ async def test_rename_to_another_bulbs_name_is_refused():
         assert (await put(c, "bulbs", two, cur["revision"])).status_code == 200
         r = await rename(c, "den", svc.config.bulbs[0].name, bulbs_rev=2)
     assert r.status_code == 422
+
+
+async def test_segments_save_through_the_bulbs_section_and_unlock_chase():
+    app, svc = make()
+    async with client(app) as c:
+        bulbs = (await current(c, "bulbs"))
+        value = copy.deepcopy(bulbs["value"])
+        value.append({"name": "strip", "ip": "10.0.0.9", "mac": None, "kind": "govee",
+                      "port": 4003, "segments": 20})
+        r = await put(c, "bulbs", value, bulbs["revision"])
+        assert r.status_code == 200
+        saved = {b["name"]: b for b in (await current(c, "bulbs"))["value"]}
+        assert saved["strip"]["segments"] == 20
+    from app.bulbs.base import capabilities_for
+
+    strip = next(b for b in svc.config.bulbs if b.name == "strip")
+    assert "chase" in capabilities_for(strip.kind, strip.segments).kinds
+
+
+async def test_segments_default_to_one_when_a_bulbs_save_leaves_them_out():
+    app, svc = make()
+    async with client(app) as c:
+        bulbs = await current(c, "bulbs")
+        value = copy.deepcopy(bulbs["value"])
+        value.append({"name": "strip", "ip": "10.0.0.9", "mac": None, "kind": "govee",
+                      "port": 4003})
+        assert (await put(c, "bulbs", value, bulbs["revision"])).status_code == 200
+    assert next(b for b in svc.config.bulbs if b.name == "strip").segments == 1
+
+
+async def test_page_sends_segments_with_every_bulbs_save():
+    from app.web.status import PAGE
+
+    html = PAGE.read_text(encoding="utf-8")
+    assert "segments:" in html and '"Segments"' in html

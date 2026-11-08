@@ -159,3 +159,76 @@ def test_parse_config_matches_load_config_and_load_raw_reports_toml_errors(tmp_p
 ])
 def test_error_location_maps_config_paths_to_the_editor_section_and_field(path, where):
     assert settings.error_location(path) == where
+
+
+def test_bulb_kind_round_trips_and_is_an_allowed_field(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text('[general]\ndispatch_enabled = false\n'
+                    '[[bulbs]]\nname = "strip"\nip = "10.0.0.5"\nkind = "govee"\n')
+    cfg = load_config(toml)
+    machine, sections = settings.machine_raw_from_config(cfg), settings.sections_from_config(cfg)
+    assert sections["bulbs"][0]["kind"] == "govee" and sections["bulbs"][0]["port"] == 4003
+    assert settings.build_config(machine, sections, tmp_path) == cfg
+    settings.check_section_shape("bulbs", sections["bulbs"])
+
+
+LAYERED = """
+[general]
+dispatch_enabled = false
+[[bulbs]]
+name = "strip"
+ip = "1.2.3.5"
+kind = "govee"
+segments = 20
+[[teams]]
+league = "nfl"
+id = "9"
+abbr = "GB"
+bulbs = ["strip"]
+color = "#00ff00"
+[teams.effects]
+speed = 3.0
+[teams.fixture_effects.strip]
+kind = "chase"
+alt_color = "#ff8c00"
+[effects.fixtures.strip]
+duration_s = 4.0
+"""
+
+
+def layered_cfg(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(LAYERED)
+    return load_config(p)
+
+
+def test_layers_round_trip_through_sections(tmp_path):
+    cfg = layered_cfg(tmp_path)
+    sections = settings.sections_from_config(cfg)
+    assert sections["bulbs"][0]["segments"] == 20
+    assert sections["teams"][0]["effects"] == {"speed": 3.0}
+    assert sections["teams"][0]["fixture_effects"]["strip"] == {
+        "kind": "chase", "alt_color": "#ff8c00"}
+    assert sections["effects"]["fixtures"]["strip"] == {"duration_s": 4.0}
+    machine = settings.machine_raw_from_config(cfg)
+    assert settings.build_config(machine, sections, tmp_path) == cfg
+
+
+def test_unset_layers_are_left_out_of_sections():
+    _, _, sections = example()
+    assert "effects" not in sections["teams"][0]
+    assert "fixture_effects" not in sections["teams"][0]
+    assert "fixtures" not in sections["effects"]
+
+
+@pytest.mark.parametrize("section, value, needle", [
+    ("effects", {"score": {}, "fixtures": {"strip": {"bogus": 1}}}, "bogus"),
+    ("effects", {"fixtures": []}, "must be an object"),
+    ("teams", [{"league": "nfl", "id": "9", "abbr": "GB", "bulbs": ["strip"],
+                "fixture_effects": {"strip": {"color": "#fff", "nope": 1}}}], "nope"),
+    ("teams", [{"league": "nfl", "id": "9", "abbr": "GB", "bulbs": ["strip"],
+                "effects": {"color": "#fff"}}], "color"),
+])
+def test_shape_check_covers_layers(section, value, needle):
+    with pytest.raises(ConfigError, match=needle):
+        settings.check_section_shape(section, value)

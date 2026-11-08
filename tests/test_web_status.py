@@ -724,3 +724,77 @@ async def test_page_script_has_no_duplicate_function_names():
     assert len(names) > 20  # the pattern really is finding the page's functions
     dupes = [n for n, count in collections.Counter(names).items() if count > 1]
     assert dupes == [], f"defined more than once: {dupes}"
+
+
+# --- Effects matrix (C50) --------------------------------------------------------------------
+
+
+def strip_cfg():
+    from app.effects import EffectLayer
+
+    return Config(
+        GeneralConfig(True, "x.db", delay_s=45),
+        (BulbConfig("lamp", "10.0.0.5"),
+         BulbConfig("strip", "10.0.0.6", kind="govee", segments=20)),
+        (TeamConfig("nfl", "9", "GB", ("lamp", "strip"), color=(0, 255, 0),
+                    effect=EffectLayer(params={"duration_s": 4.0}),
+                    fixture_effects={"strip": EffectLayer(
+                        "chase", {"chunk": 5}, alt_color=(255, 140, 0))}),),
+        EffectConfig(),
+    )
+
+
+def make_matrix(bulbs, config=None, dry_run=False):
+    from app.dispatch.dispatcher import (
+        Dispatcher,
+        make_bulb_pulse,
+        make_cell_pattern,
+        make_planner,
+    )
+
+    store = Store()
+    config = config or strip_cfg()
+    dispatcher = Dispatcher(store, bulbs, make_planner(config, {}, store))
+    return create_app(store, config, WatcherStats(started_at=NOW), bulbs, dry_run,
+                      now=lambda: NOW, dispatcher=dispatcher,
+                      pulse_pattern=make_bulb_pulse(config, {}),
+                      cell_pattern=make_cell_pattern(config, {}))
+
+
+async def test_matrix_lists_each_team_bulb_with_kinds_and_where_settings_come_from():
+    app = make_matrix({"lamp": Recorder("lamp"), "strip": Recorder("strip")})
+    async with client(app) as c:
+        r = await c.get("/api/effects/matrix")
+    cells = {x["bulb"]: x for x in r.json()["cells"]}
+    lamp, strip = cells["lamp"], cells["strip"]
+    assert lamp["kinds"] == ["pulse"] and strip["kinds"] == ["chase", "pulse"]
+    assert (lamp["kind"], lamp["kind_from"]) == ("pulse", "default")
+    assert lamp["params"]["duration_s"] == {"value": 4.0, "from": "team"}
+    assert lamp["params"]["pulses"] == {"value": 5, "from": "default"}
+    assert (strip["kind"], strip["kind_from"]) == ("chase", "team x fixture")
+    assert strip["params"]["chunk"] == {"value": 5, "from": "team x fixture"}
+    assert strip["params"]["speed"] == {"value": 4.0, "from": "built-in"}
+    assert strip["color"] == {"value": "#00ff00", "from": "team"}
+    assert strip["alt_color"] == {"value": "#ff8c00", "from": "team x fixture"}
+    assert lamp["alt_color"] == {"value": None, "from": None}  # falls back to ESPN at play time
+
+
+async def test_matrix_test_plays_the_same_pattern_an_event_would_and_restores():
+    strip = Recorder("strip")
+    app = make_matrix({"lamp": Recorder("lamp"), "strip": strip})
+    async with client(app) as c:
+        r = await c.post("/api/effects/test", headers=HDR,
+                         json={"league": "nfl", "id": "9", "bulb": "strip"})
+    assert r.status_code == 200
+    assert [x[0] for x in strip.calls] == ["snapshot", "play_segments", "restore"]
+    assert strip.calls[1][2] == 20  # segments
+
+
+async def test_matrix_test_needs_header_and_rejects_unknown_team_bulb_pairs():
+    app = make_matrix({"lamp": Recorder("lamp"), "strip": Recorder("strip")})
+    body = {"league": "nfl", "id": "9", "bulb": "strip"}
+    async with client(app) as c:
+        assert (await c.post("/api/effects/test", json=body)).status_code == 403
+        assert (await c.post("/api/effects/test", headers=HDR, json={})).status_code == 400
+        other = {"league": "nfl", "id": "1", "bulb": "strip"}
+        assert (await c.post("/api/effects/test", headers=HDR, json=other)).status_code == 404

@@ -17,7 +17,7 @@ from pywizlight import PilotBuilder, wizlight
 from pywizlight.discovery import discover_lights
 from pywizlight.exceptions import WizLightError
 
-from app.bulbs.base import BulbAdapter, Color, Sleep
+from app.bulbs.base import BulbAdapter, Capabilities, Color, Sleep, capabilities_for
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +81,8 @@ def pilot_for(snap: WizSnapshot) -> PilotBuilder | None:
 
 
 class WizBulb(BulbAdapter):
+    capabilities: Capabilities = capabilities_for("wiz")
+
     def __init__(
         self,
         name: str,

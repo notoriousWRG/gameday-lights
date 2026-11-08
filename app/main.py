@@ -11,8 +11,9 @@ import time
 from collections.abc import Coroutine
 from datetime import datetime, timedelta
 
-from app.bulbs.base import BulbAdapter, DryRunBulb
-from app.bulbs.wiz import WizBulb, discover_wiz
+from app.bulbs.base import BulbAdapter, DryRunBulb, capabilities_for
+from app.bulbs.govee import GoveeBulb, discover_govee
+from app.bulbs.wiz import BulbUnreachable, WizBulb, discover_wiz
 from app.config import (
     BulbConfig,
     Config,
@@ -25,6 +26,7 @@ from app.config import (
 from app.dispatch.dispatcher import (
     Dispatcher,
     make_bulb_pulse,
+    make_cell_pattern,
     make_planner,
     make_team_pulse,
     resolve_pattern,
@@ -57,7 +59,9 @@ class VirtualClock:
 
 def make_bulb(b: BulbConfig, dry: bool, sleep=asyncio.sleep) -> BulbAdapter:
     if dry:
-        return DryRunBulb(b.name, sleep=sleep)
+        return DryRunBulb(b.name, sleep=sleep, capabilities=capabilities_for(b.kind, b.segments))
+    if b.kind == "govee":
+        return GoveeBulb(b.name, b.ip, mac=b.mac, port=b.port, sleep=sleep, segments=b.segments)
     return WizBulb(b.name, b.ip, mac=b.mac, port=b.port, signing_key=b.signing_key, sleep=sleep)
 
 
@@ -184,8 +188,9 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
         if cfg.web.enabled:
             app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
                              dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
-                             settings=service, espn=client, discover_bulbs=discover_wiz,
-                             team_pulse=make_team_pulse(current, colors))
+                             settings=service, espn=client, discover_bulbs=discover_all,
+                             team_pulse=make_team_pulse(current, colors),
+                             cell_pattern=make_cell_pattern(current, colors))
             tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
         await run_tasks(tasks)
     finally:
@@ -232,6 +237,27 @@ async def run_replay(cfg: Config, directory: str, speed: float, fresh: bool) -> 
         store.close()
 
 
+async def discover_all(broadcast: str = "255.255.255.255") -> list[dict]:
+    """WiZ and Govee bulbs on the LAN, each tagged with its kind. One brand failing does not hide
+    the other's results; both failing raises."""
+    kinds = ("wiz", "govee")
+    results = await asyncio.gather(
+        discover_wiz(broadcast), discover_govee(), return_exceptions=True)
+    found: list[dict] = []
+    errors = []
+    for kind, res in zip(kinds, results, strict=True):
+        if isinstance(res, BaseException):
+            if not isinstance(res, Exception):
+                raise res
+            log.warning("%s discovery failed: %s", kind, res)
+            errors.append(res)
+        else:
+            found += [{**b, "kind": kind} for b in res]
+    if errors and len(errors) == len(kinds):
+        raise BulbUnreachable("; ".join(str(e) for e in errors))
+    return found
+
+
 async def discover(broadcast: str) -> None:
     from pywizlight.discovery import discover_lights
 
@@ -240,6 +266,15 @@ async def discover(broadcast: str) -> None:
         print("No WiZ bulbs found.")
     for b in bulbs:
         print(f"{b.ip}  mac {b.mac}")
+    try:
+        strips = await discover_govee()
+    except BulbUnreachable as e:
+        print(f"Govee discovery failed: {e}")
+        return
+    if not strips:
+        print("No Govee devices found.")
+    for b in strips:
+        print(f"{b['ip']}  govee id {b['mac']}")
 
 
 async def test_effect(cfg: Config, abbr: str, dry_run: bool) -> int:
@@ -306,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--speed", type=float, default=60.0, help="replay speed multiplier")
     run.add_argument("--fresh", action="store_true", help="replay: start with an empty database")
     run.add_argument("--dry-run", action="store_true", help="log effects, don't touch bulbs")
-    d = sub.add_parser("discover", help="find WiZ bulbs on the LAN")
+    d = sub.add_parser("discover", help="find WiZ and Govee bulbs on the LAN")
     d.add_argument("--broadcast", default="255.255.255.255")
     c = sub.add_parser("config", help="export or re-import the stored settings")
     csub = c.add_subparsers(dest="config_command", required=True)

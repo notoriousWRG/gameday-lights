@@ -83,6 +83,19 @@
   input[type="number"] { font: inherit; width: 96px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
   input[type="number"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .help { font-size: 13px; margin-top: 4px; }
+  /* effects matrix */
+  .mx-team { border-top: 1px solid var(--line); padding: 12px 0; }
+  .mx-team:first-child { border-top: 0; }
+  .mx-cells { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 8px; }
+  .mx-cell { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .mx-cell h3 { margin: 0 0 4px; font-size: 15px; }
+  .mx-resolved { font-size: 14px; margin-bottom: 8px; }
+  .mx-from { color: var(--muted); font-size: 12px; }
+  .mx-fields { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin: 8px 0; }
+  .mx-fields label { display: block; font-size: 12px; color: var(--muted); }
+  .mx-fields input[type="number"] { width: 78px; }
+  .mx-fields select { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .mx-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   /* scoreboard card */
   .sb-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; margin-bottom: 8px; }
   .sb-top h2 { margin: 0; }
@@ -213,6 +226,13 @@
       <section class="card">
         <h2>Try it</h2>
         <div id="effects-test"></div>
+      </section>
+      <section class="card">
+        <h2>Per team and bulb</h2>
+        <p class="muted help">Override what a team plays on one bulb: a different effect, timing or colors. Anything left blank follows the level above (the score effect, then the team's colors). Test plays the saved effect.</p>
+        <div id="matrix-banner"></div>
+        <div id="matrix-body"></div>
+        <div class="savebar" id="matrix-savebar"></div>
       </section>
     </div>
   </div>
@@ -924,7 +944,138 @@ function renderEffectTest() {
   if (notes[testBulb]) parts.push(el("div", notes[testBulb].text, "help " + notes[testBulb].cls));
   box.replaceChildren(...parts);
 }
-EFFECTS.after = renderEffectTest;
+EFFECTS.after = () => { renderEffectTest(); if (typeof MATRIX !== "undefined") MATRIX.after(); };
+
+// ---- Effects matrix: what each followed team plays on each bulb --------------------------------
+// Edits the team x fixture layer (teams[i].fixture_effects[bulb]) in the `teams` section. The summary
+// line comes from GET /api/effects/matrix, which uses the same resolver a real score does.
+const FX_KIND_LABEL = {pulse: "Pulse", chase: "Chase"};
+const KIND_FIELDS = {
+  pulse: [["pulses", "Pulses", 1, 1, ""], ["duration_s", "Duration", 0.1, 0.5, "s"]],
+  chase: [["chunk", "Chunk", 1, 1, "segments"], ["speed", "Speed", 0.1, 0.5, "seg/s"], ["duration_s", "Duration", 0.1, 0.5, "s"]],
+};
+const FROM_LABEL = {"team x fixture": "this cell", "built-in": "built-in"};
+const mxFrom = (f) => FROM_LABEL[f] || f;
+const MATRIX = sectionEditor({section: "teams", id: "matrix", fields: [], draw: drawMatrix});
+MATRIX.indexed = true;
+MATRIX.cells = {}; MATRIX.sig = ""; MATRIX.note = {};
+const mxKey = (t, bulb) => `${t.league}/${t.id}/${bulb}`;
+async function loadMatrix() {
+  try { const m = await getJson("api/effects/matrix"); MATRIX.cells = Object.fromEntries(m.cells.map((c) => [mxKey(c, c.bulb), c])); }
+  catch (e) { MATRIX.banner = {cls: "bad", text: "Couldn't load the effect summary: " + e.message}; }
+  if (MATRIX.loaded) edDraw(MATRIX);
+}
+MATRIX.after = () => {  // reload the summary whenever the saved settings behind it change
+  const sig = JSON.stringify([MATRIX.saved, EFFECTS.saved]);
+  if (MATRIX.loaded && sig !== MATRIX.sig) { MATRIX.sig = sig; loadMatrix(); }
+};
+function mxSummary(info) {
+  const box = el("div", undefined, "mx-resolved");
+  if (!info) { box.append(el("span", "Saved effect not loaded yet.", "muted")); return box; }
+  box.append(el("strong", FX_KIND_LABEL[info.kind] || info.kind), el("span", " " + mxFromTag(info.kind_from), "mx-from"));
+  Object.entries(info.params).forEach(([k, p]) => {
+    if (k === "brightness") return;
+    box.append(el("span", ` · ${k.replace("_s", "")} ${p.value}`), el("span", " " + mxFromTag(p.from), "mx-from"));
+  });
+  [["color", info.color], ["alt_color", info.alt_color]].forEach(([k, c]) => {
+    box.append(document.createTextNode(" · "));
+    if (c.value) { box.append(dot(c.value), el("span", mxFromTag(c.from), "mx-from")); }
+    else box.append(el("span", k === "color" ? "team color" : "team alt color", "mx-from"));
+  });
+  return box;
+}
+const mxFromTag = (f) => `(${mxFrom(f)})`;
+function mxCell(ed, t, i, bulb) {
+  const info = ed.cells[mxKey(t, bulb)];
+  const layer = (t.fixture_effects || {})[bulb] || {};
+  const own = () => { t.fixture_effects = t.fixture_effects || {}; return (t.fixture_effects[bulb] = t.fixture_effects[bulb] || {}); };
+  const prune = () => {
+    const fx = t.fixture_effects;
+    if (fx && fx[bulb] && !Object.keys(fx[bulb]).length) delete fx[bulb];
+    if (fx && !Object.keys(fx).length) delete t.fixture_effects;
+  };
+  const touched = () => { prune(); edSaveBar(ed); };
+  const cell = el("div", undefined, "mx-cell");
+  cell.append(el("h3", bulb + (info && info.segments > 1 ? ` · ${info.segments} segments` : "")), mxSummary(info));
+
+  const kinds = info ? info.kinds : ["pulse"], kind = layer.kind || (info ? info.kind : "pulse");
+  const fields = el("div", undefined, "mx-fields");
+  const ksel = document.createElement("select"); ksel.setAttribute("aria-label", `Effect for ${t.abbr} on ${bulb}`);
+  const inherit = el("option", "Same as above"); inherit.value = ""; ksel.append(inherit);
+  kinds.forEach((k) => { const o = el("option", FX_KIND_LABEL[k] || k); o.value = k; ksel.append(o); });
+  ksel.value = layer.kind || "";
+  ksel.addEventListener("change", () => { if (ksel.value) own().kind = ksel.value; else if (t.fixture_effects && t.fixture_effects[bulb]) delete t.fixture_effects[bulb].kind; prune(); edDraw(ed); });
+  const kw = el("div"); kw.append(el("label", "Effect"), ksel); fields.append(kw);
+
+  (KIND_FIELDS[kind] || []).forEach(([key, label, min, step, unit]) => {
+    const w = el("div"), lab = el("label", unit ? `${label} (${unit})` : label);
+    const input = document.createElement("input"); input.type = "number"; input.min = min; input.step = step;
+    input.value = layer[key] === undefined ? "" : layer[key];
+    if (info && info.params[key]) input.placeholder = String(info.params[key].value);
+    input.setAttribute("aria-label", `${label} for ${t.abbr} on ${bulb}`);
+    input.addEventListener("input", () => {
+      if (input.value === "") { if (t.fixture_effects && t.fixture_effects[bulb]) delete t.fixture_effects[bulb][key]; }
+      else own()[key] = Number(input.value);
+      touched();
+    });
+    w.append(lab, input); fields.append(w);
+  });
+  [["color", "Color"], ["alt_color", "Alt color"]].forEach(([key, label]) => {
+    const w = el("div"), input = document.createElement("input"); input.type = "color";
+    input.value = layer[key] || (info && info[key].value) || "#888888";
+    input.setAttribute("aria-label", `${label} for ${t.abbr} on ${bulb}`);
+    input.addEventListener("input", () => { own()[key] = input.value; touched(); });
+    w.append(el("label", label), input);
+    if (layer[key]) {
+      const clear = el("button", "Reset"); clear.type = "button";
+      clear.addEventListener("click", () => { delete t.fixture_effects[bulb][key]; prune(); edDraw(ed); });
+      w.append(clear);
+    }
+    fields.append(w);
+  });
+  cell.append(fields);
+
+  const actions = el("div", undefined, "mx-actions"), nk = mxKey(t, bulb);
+  const test = el("button", ed.note[nk] && ed.note[nk].busy ? "Playing…" : "Test", "primary"); test.type = "button";
+  test.disabled = ed.dirty() || EFFECTS.dirty() || !!busy[bulb] || !info;
+  test.addEventListener("click", () => testCell(ed, t, bulb));
+  actions.append(test);
+  if (Object.keys(layer).length) {
+    const reset = el("button", "Clear override"); reset.type = "button";
+    reset.addEventListener("click", () => { delete t.fixture_effects[bulb]; prune(); edDraw(ed); });
+    actions.append(reset);
+  }
+  cell.append(actions);
+  if (ed.dirty()) cell.append(el("div", "Save to test your changes: the test plays the saved effect.", "muted help"));
+  const n = ed.note[nk]; if (n && n.text) cell.append(el("div", n.text, "help " + n.cls));
+  return cell;
+}
+async function testCell(ed, t, bulb) {
+  const nk = mxKey(t, bulb);
+  ed.note[nk] = {busy: true}; busy[bulb] = true; edDraw(ed); renderBulbs();
+  let note;
+  try {
+    const r = await fetch("api/effects/test", {method: "POST", headers: {"X-Gameday": "1", "Content-Type": "application/json"},
+      body: JSON.stringify({league: t.league, id: t.id, bulb})});
+    const body = await r.json().catch(() => ({}));
+    note = r.ok ? {text: body.dry_run ? "Dry-run: nothing was sent to the bulb." : `Played (${body.duration_s}s).`, cls: "ok"}
+               : {text: body.detail || `HTTP ${r.status}`, cls: "bad"};
+  } catch (e) { note = {text: "Request failed: " + e.message, cls: "bad"}; }
+  busy[bulb] = false; ed.note[nk] = note; edDraw(ed); renderBulbs();
+  setTimeout(() => { if (ed.note[nk] === note) { delete ed.note[nk]; edDraw(ed); } }, 8000);
+}
+function drawMatrix(ed, body) {
+  if (!ed.draft.length) { body.replaceChildren(el("p", "No teams followed yet. Follow a team on the Teams screen first.", "empty")); return; }
+  body.replaceChildren(...ed.draft.map((t, i) => {
+    const box = el("div", undefined, "mx-team"), head = el("strong", `${t.abbr} (${t.league.toUpperCase()})`);
+    box.append(head);
+    (ed.errors["#" + i] || []).forEach((m) => box.append(el("div", m, "err")));
+    const cells = el("div", undefined, "mx-cells");
+    t.bulbs.forEach((b) => cells.append(mxCell(ed, t, i, b)));
+    box.append(cells);
+    return box;
+  }));
+}
 
 // ---- Advanced screen ----------------------------------------------------------------------
 // Timings. The 10 s poll floor is enforced by the server too, so it holds even if this page is bypassed.
@@ -949,13 +1100,16 @@ const ADVANCED = sectionEditor({section: "advanced", id: "advanced", fields: Obj
 // ---- Bulbs screen -------------------------------------------------------------------------
 // Rows come from the `bulbs` section (signing keys are never sent to the browser). A new key typed
 // here is held in b._key until Save; an untouched key is left out of the PUT so the server keeps it.
-const DEFAULT_PORT = 38899;
-const ADD = {name: "", ip: "", mac: "", port: ""};
+const DEFAULT_PORTS = {wiz: 38899, govee: 4003};
+const KIND_LABEL = {wiz: "WiZ", govee: "Govee"};
+const defaultPort = (kind) => DEFAULT_PORTS[kind || "wiz"];
+const ADD = {name: "", ip: "", mac: "", port: "", kind: "wiz"};
 const BD = {busy: false, found: null, note: ""};
 const BR = {editing: null, error: "", busy: false};  // renaming a saved bulb
 function bulbPayload(draft) {
   return draft.map((b) => {
-    const out = {name: b.name, ip: b.ip, mac: b.mac ? b.mac : null, port: b.port === "" || b.port === null ? DEFAULT_PORT : Number(b.port)};
+    const out = {name: b.name, ip: b.ip, mac: b.mac ? b.mac : null, kind: b.kind || "wiz", port: b.port === "" || b.port === null ? defaultPort(b.kind) : Number(b.port),
+                 segments: (b.kind || "wiz") === "govee" && b.segments !== "" && b.segments != null ? Number(b.segments) : 1};
     if (b._clear) out.signing_key = null; else if (b._key) out.signing_key = b._key;
     return out;
   });
@@ -1024,9 +1178,16 @@ function bulbRow(ed, b, i) {
   rm.title = users.length ? `Used by ${users.join(", ")}: change those teams first` : "";
   rm.setAttribute("aria-label", `Remove ${b.name}`);
   rm.addEventListener("click", () => { ed.draft.splice(i, 1); ed.errors = {}; edDraw(ed); });
+  if (saved || b.kind) head.insertBefore(el("span", KIND_LABEL[b.kind || "wiz"] || b.kind, "pill"), head.firstChild);
   head.append(test, rm); row.append(head);
   const fields = el("div", undefined, "fields");
   fields.append(bulbText(ed, i, b, "ip", "IP", {size: 14}), bulbText(ed, i, b, "mac", "MAC (optional)", {size: 14}), bulbText(ed, i, b, "port", "Port", {size: 6}));
+  if ((b.kind || "wiz") !== "wiz") {
+    fields.append(bulbText(ed, i, b, "segments", "Segments", {size: 4, type: "number"}));
+    row.append(fields, el("div", "Segments you can color separately along the strip. Chase needs more than 1; leave 1 for a whole-strip color.", "muted help"));
+    (ed.errors["#" + i] || []).forEach((m) => row.append(el("div", m, "err")));
+    return row;
+  }
   const key = el("span", undefined, "colorfield");
   key.append(el("span", "Signing key", "muted"));
   const kin = document.createElement("input"); kin.type = "password"; kin.autocomplete = "new-password"; kin.size = 14;
@@ -1044,7 +1205,7 @@ function bulbRow(ed, b, i) {
   return row;
 }
 function addBulb(ed, b) {
-  ed.draft.push({name: b.name, ip: b.ip, mac: b.mac || null, port: b.port === "" ? DEFAULT_PORT : Number(b.port), has_signing_key: false, _new: true});
+  ed.draft.push({name: b.name, ip: b.ip, mac: b.mac || null, kind: b.kind || "wiz", port: b.port === "" ? defaultPort(b.kind) : Number(b.port), segments: 1, has_signing_key: false, _new: true});
   ed.errors = {}; ed.banner = null; edDraw(ed);
 }
 function drawBulbs(ed, body) {
@@ -1069,9 +1230,9 @@ function renderBulbAdd() {
   if (BD.note) parts.push(el("div", BD.note, "err"));
   (BD.found || []).forEach((f) => {
     const taken = f.known || ed.draft.some((b) => b.ip === f.ip || (b.mac && b.mac === f.mac));
-    const r = el("div", undefined, "result"), text = el("span", `${f.ip}  ·  ${f.mac}${f.name ? "  ·  " + f.name : ""}`, "grow");
+    const r = el("div", undefined, "result"), text = el("span", `${KIND_LABEL[f.kind] || "WiZ"}  ·  ${f.ip}  ·  ${f.mac}${f.name ? "  ·  " + f.name : ""}`, "grow");
     const add = el("button", taken ? "Added" : "Add"); add.type = "button"; add.disabled = taken;
-    add.addEventListener("click", () => addBulb(ed, {name: freeBulbName(ed), ip: f.ip, mac: f.mac, port: ""}));
+    add.addEventListener("click", () => addBulb(ed, {name: freeBulbName(ed), ip: f.ip, mac: f.mac, kind: f.kind, port: ""}));
     r.append(text, add); parts.push(r);
   });
   const form = el("div", undefined, "fields"); form.style.marginTop = "14px";
@@ -1084,10 +1245,14 @@ function renderBulbAdd() {
   go.addEventListener("click", () => {
     const miss = !ADD.name.trim() ? "a name" : !ADD.ip.trim() ? "an IP address" : "";
     if (miss) { BD.note = `Add by IP needs ${miss}.`; renderBulbAdd(); return; }
-    addBulb(ed, {name: ADD.name.trim(), ip: ADD.ip.trim(), mac: ADD.mac.trim(), port: ADD.port.trim()});
+    addBulb(ed, {name: ADD.name.trim(), ip: ADD.ip.trim(), mac: ADD.mac.trim(), kind: ADD.kind, port: ADD.port.trim()});
     ADD.name = ADD.ip = ADD.mac = ADD.port = ""; BD.note = ""; renderBulbAdd();
   });
-  form.append(inp("name", "Name", 12), inp("ip", "IP", 14), inp("mac", "MAC (optional)", 14), inp("port", "Port", 6), go);
+  const kw = el("label", undefined, "colorfield"), ks = document.createElement("select");
+  Object.entries(KIND_LABEL).forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; ks.append(o); });
+  ks.value = ADD.kind; ks.addEventListener("change", () => { ADD.kind = ks.value; });
+  kw.append(el("span", "Brand", "muted"), ks);
+  form.append(kw, inp("name", "Name", 12), inp("ip", "IP", 14), inp("mac", "MAC (optional)", 14), inp("port", "Port", 6), go);
   parts.push(form);
   box.replaceChildren(...parts);
 }
@@ -1107,7 +1272,7 @@ function bulbsRefresh() {  // keep reachability and test results current without
 const ROUTES = {
   "#/status": {view: "view-status", tab: "tab-status"},
   "#/teams": {view: "view-teams", tab: "tab-teams", show() { if (!(TM.loaded && dirty())) loadTeams(); else renderTeams(); }},
-  "#/effects": {view: "view-effects", tab: "tab-effects", show: () => edShow(EFFECTS)},
+  "#/effects": {view: "view-effects", tab: "tab-effects", show() { edShow(EFFECTS); edShow(MATRIX); MATRIX.sig = ""; }},
   "#/bulbs": {view: "view-bulbs", tab: "tab-bulbs", show: () => edShow(BULBS)},
   "#/settings": {view: "view-settings", tab: "tab-settings", show: () => edShow(SETTINGS)},
   "#/advanced": {view: "view-advanced", tab: "tab-advanced", show: () => edShow(ADVANCED)},

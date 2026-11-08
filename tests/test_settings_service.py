@@ -221,3 +221,54 @@ def test_forced_import_refreshes_the_snapshot_and_notifies_running_components():
     svc.subscribe(lambda old, new: seen.append((old.general.delay_s, new.general.delay_s)))
     svc.seed(cfg, force=True)
     assert svc.config.general.delay_s == 45 and seen == [(30.0, 45.0)]
+
+
+LAYERED = """
+[general]
+dispatch_enabled = false
+[[bulbs]]
+name = "strip"
+ip = "1.2.3.5"
+kind = "govee"
+segments = 20
+[[teams]]
+league = "nfl"
+id = "9"
+abbr = "GB"
+bulbs = ["strip"]
+[teams.effects]
+speed = 3.0
+[teams.fixture_effects.strip]
+kind = "chase"
+alt_color = "#ff8c00"
+[effects.fixtures.strip]
+duration_s = 4.0
+"""
+
+
+def layered(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(LAYERED)
+    cfg = load_config(p)
+    svc = SettingsService(store := Store(), settings.machine_raw_from_config(cfg), tmp_path,
+                          now=lambda: NOW)
+    svc.seed(cfg)
+    svc.load()
+    return svc, store, cfg
+
+
+def test_export_keeps_effect_layers_and_reads_back_equal(tmp_path):
+    svc, _, cfg = layered(tmp_path)
+    out = tmp_path / "exported.toml"
+    out.write_text(config_to_toml(svc.config), encoding="utf-8")
+    assert load_config(out) == cfg
+
+
+def test_renaming_a_bulb_renames_its_effect_layers_too(tmp_path):
+    svc, _, _ = layered(tmp_path)
+    rev = lambda s: svc.sections()[s][0]  # noqa: E731
+    cfg = svc.rename_bulb("strip", "porch", rev("bulbs"), rev("teams"))
+    assert "porch" in cfg.teams[0].fixture_effects
+    assert "porch" in cfg.fixture_effects
+    assert "strip" not in cfg.teams[0].fixture_effects and "strip" not in cfg.fixture_effects
+    assert cfg.teams[0].fixture_effects["porch"].kind == "chase"

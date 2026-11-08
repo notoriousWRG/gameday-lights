@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from app.bulbs.base import PatternError
-from app.effects import EffectConfig, build_pattern, parse_color
+from app.bulbs.base import PatternError, capabilities_for
+from app.effects import (
+    KIND_PARAMS,
+    EffectConfig,
+    EffectLayer,
+    build_effect,
+    build_pattern,
+    parse_color,
+    resolve_effect,
+)
 
 MIN_POLL_S = 10.0
 
@@ -27,6 +37,10 @@ class GeneralConfig:
     poll_break_s: float = 60.0
 
 
+BULB_KINDS = ("wiz", "govee")
+DEFAULT_PORTS = {"wiz": 38899, "govee": 4003}
+
+
 @dataclass(frozen=True)
 class BulbConfig:
     name: str
@@ -34,6 +48,8 @@ class BulbConfig:
     mac: str | None = None
     port: int = 38899
     signing_key: str | None = None
+    kind: str = "wiz"
+    segments: int = 1  # individually addressable segments along the fixture; 1 = whole fixture
 
 
 @dataclass(frozen=True)
@@ -44,6 +60,8 @@ class TeamConfig:
     bulbs: tuple[str, ...]
     color: tuple[int, int, int] | None = None
     alt_color: tuple[int, int, int] | None = None
+    effect: EffectLayer | None = None  # team layer: kind and parameters (colors are above)
+    fixture_effects: Mapping[str, EffectLayer] = field(default_factory=dict)  # team x fixture
 
 
 @dataclass(frozen=True)
@@ -62,6 +80,7 @@ class Config:
     teams: tuple[TeamConfig, ...]
     score_effect: EffectConfig = field(default_factory=EffectConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    fixture_effects: Mapping[str, EffectLayer] = field(default_factory=dict)  # fixture layer
 
 
 def _color(table: dict, key: str, where: str):
@@ -82,6 +101,13 @@ def _num(table: dict, key: str, default: float, where: str, minimum: float) -> f
     return float(v)
 
 
+def _segments(table: dict, kind: str, where: str) -> int:
+    n = int(_num(table, "segments", 1, where, 1))
+    if kind != "govee" and n != 1:
+        raise ConfigError(f"{where}.segments: a {kind} bulb has no segments")
+    return n
+
+
 def _str(table: dict, key: str, where: str, required: bool = True) -> str | None:
     v = table.get(key)
     if v is None:
@@ -89,6 +115,51 @@ def _str(table: dict, key: str, where: str, required: bool = True) -> str | None
             raise ConfigError(f"{where}.{key}: required")
         return None
     return str(v)
+
+
+_LAYER_KEYS = {"kind", "color", "alt_color"}
+_PARAM_MINIMUMS = {"pulses": 1, "chunk": 1, "duration_s": 0.1, "speed": 0.1, "brightness": 1}
+_INT_PARAMS = {"pulses", "chunk", "brightness"}
+
+
+def _layer(table: Any, where: str, colors: bool = True) -> EffectLayer:
+    """One override layer from its table: `kind`, any of the kind's parameters, and colors."""
+    if not isinstance(table, dict):
+        raise ConfigError(f"{where}: must be a table")
+    allowed = set(_PARAM_MINIMUMS) | (_LAYER_KEYS if colors else {"kind"})
+    for key in table:
+        if key not in allowed:
+            raise ConfigError(f"{where}.{key}: unknown field")
+    kind = _str(table, "kind", where, False)
+    if kind is not None and kind not in KIND_PARAMS:
+        raise ConfigError(f"{where}.kind: must be one of {', '.join(KIND_PARAMS)}")
+    params: dict[str, float | int] = {}
+    for key, minimum in _PARAM_MINIMUMS.items():
+        if key not in table:
+            continue
+        if kind is not None and key not in KIND_PARAMS[kind]:
+            raise ConfigError(f"{where}.{key}: not a {kind} parameter")
+        v = _num(table, key, 0, where, minimum)
+        if key == "brightness" and v > 255:
+            raise ConfigError(f"{where}.brightness: must be <= 255 (got {v:g})")
+        params[key] = int(v) if key in _INT_PARAMS else v
+    return EffectLayer(
+        kind, params,
+        _color(table, "color", where) if colors else None,
+        _color(table, "alt_color", where) if colors else None,
+    )
+
+
+def _layers(table: Any, where: str, bulb_names: tuple[str, ...]) -> dict[str, EffectLayer]:
+    """A table of {bulb name: layer}; every name must be a known bulb."""
+    if not isinstance(table, dict):
+        raise ConfigError(f"{where}: must be a table")
+    out = {}
+    for name, layer in table.items():
+        if name not in bulb_names:
+            raise ConfigError(f"{where}.{name}: unknown bulb")
+        out[name] = _layer(layer, f"{where}.{name}")
+    return out
 
 
 def load_raw(path: str | Path) -> tuple[dict, Path]:
@@ -138,9 +209,14 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
             raise ConfigError(f"{where}.ip: must not be empty")
         if any(x.name == name for x in bulbs):
             raise ConfigError(f"{where}.name: duplicate bulb {name!r}")
+        kind = _str(b, "kind", where, False) or "wiz"
+        if kind not in BULB_KINDS:
+            raise ConfigError(f"{where}.kind: must be one of {', '.join(BULB_KINDS)}")
         bulbs.append(BulbConfig(
             name=name, ip=ip, mac=_str(b, "mac", where, False),
-            port=int(b.get("port", 38899)), signing_key=_str(b, "signing_key", where, False),
+            port=int(b.get("port", DEFAULT_PORTS[kind])),
+            signing_key=_str(b, "signing_key", where, False), kind=kind,
+            segments=_segments(b, kind, where),
         ))
 
     teams: list[TeamConfig] = []
@@ -152,10 +228,15 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
         for n in names:
             if not any(b.name == n for b in bulbs):
                 raise ConfigError(f"{where}.bulbs: unknown bulb {n!r}")
+        fixture_effects = _layers(t.get("fixture_effects", {}), f"{where}.fixture_effects",
+                                  tuple(names))
         team = TeamConfig(
             league=_str(t, "league", where), id=_str(t, "id", where),
             abbr=_str(t, "abbr", where), bulbs=tuple(names),
             color=_color(t, "color", where), alt_color=_color(t, "alt_color", where),
+            effect=_layer(t["effects"], f"{where}.effects", colors=False)
+            if "effects" in t else None,
+            fixture_effects=fixture_effects,
         )
         if any((x.league, x.id) == (team.league, team.id) for x in teams):
             raise ConfigError(f"{where}: duplicate team {team.league}/{team.id}")
@@ -174,6 +255,10 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
     except (PatternError, ValueError) as err:
         raise ConfigError(f"effects.score: {err}") from None
 
+    bulb_names = tuple(b.name for b in bulbs)
+    fixture_effects = _layers(raw.get("effects", {}).get("fixtures", {}), "effects.fixtures",
+                              bulb_names)
+
     w = raw.get("web", {})
     enabled = w.get("enabled", True)
     if not isinstance(enabled, bool):
@@ -188,7 +273,24 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
     cooldown = _num(w, "pulse_cooldown_s", 10, "web", 1)
     final_hold = _num(w, "final_hold_min", 30, "web", 0)
 
-    return Config(
+    config = Config(
         general, tuple(bulbs), tuple(teams), effect,
-        WebConfig(enabled, host, port, cooldown, final_hold),
+        WebConfig(enabled, host, port, cooldown, final_hold), fixture_effects,
     )
+    _check_effects(config)
+    return config
+
+
+def _check_effects(config: Config) -> None:
+    """Every team x fixture must resolve to an effect its fixture supports and the cap allows."""
+    colors = ((0, 255, 0), (255, 255, 255))
+    by_name = {b.name: b for b in config.bulbs}
+    for i, team in enumerate(config.teams):
+        for name in team.bulbs:
+            bulb = by_name[name]
+            resolved = resolve_effect(config, team, name, colors)
+            try:
+                build_effect(resolved.spec, resolved.primary, resolved.alternate,
+                             capabilities_for(bulb.kind, bulb.segments), name)
+            except (PatternError, ValueError) as err:
+                raise ConfigError(f"teams[{i}].bulbs: effect on {name!r}: {err}") from None

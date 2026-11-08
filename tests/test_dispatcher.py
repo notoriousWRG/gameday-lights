@@ -57,7 +57,8 @@ def setup(bulbs=("a",), fail=False, dry_run=False):
     clock = Clock()
     log = []
     objs = {n: Recorder(n, log, fail_flash=fail) for n in bulbs}
-    d = Dispatcher(store, objs, lambda e: (PATTERN, list(bulbs)), clock.now, clock.sleep, dry_run)
+    d = Dispatcher(store, objs, lambda e: [(b, PATTERN) for b in bulbs], clock.now, clock.sleep,
+                   dry_run)
     return store, clock, log, d
 
 
@@ -136,11 +137,12 @@ def test_make_planner_uses_config_colors_over_espn():
     store = Store()
     store.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
     espn = {("nfl", "9"): ((32, 78, 50), (255, 182, 18))}
-    pattern, names = make_planner(config(color=(0, 255, 0)), espn, store)(event())
-    assert names == ["a"]
+    plan = make_planner(config(color=(0, 255, 0)), espn, store)(event())
+    assert [n for n, _ in plan] == ["a"]
+    pattern = plan[0][1]
     assert pattern.steps[0].color == (0, 255, 0)
     assert pattern.steps[1].color == (255, 182, 18)
-    pattern, _ = make_planner(config(), espn, store)(event())
+    pattern = make_planner(config(), espn, store)(event())[0][1]
     assert pattern.steps[0].color == (32, 78, 50)
 
 
@@ -199,10 +201,10 @@ def test_planner_reads_the_current_config_each_time():
     cfg_a = config(color=(1, 2, 3))
     box = {"cfg": cfg_a}
     plan = make_planner(lambda: box["cfg"], {}, store)
-    assert plan(event())[0].steps[0].color == (1, 2, 3)
+    assert plan(event())[0][1].steps[0].color == (1, 2, 3)
     team = replace(cfg_a.teams[0], color=(9, 9, 9))
     box["cfg"] = replace(cfg_a, teams=(team,))  # a settings edit, no restart
-    assert plan(event())[0].steps[0].color == (9, 9, 9)
+    assert plan(event())[0][1].steps[0].color == (9, 9, 9)
 
 
 async def test_set_bulbs_swaps_the_registry_keeps_the_queue_for_staying_bulbs():
@@ -240,3 +242,71 @@ async def test_effects_stay_serial_across_a_registry_swap():
     d.set_bulbs({"a": keep})  # a settings edit that leaves this bulb alone
     await d.wait_idle()
     assert [x[1] for x in log] == ["snapshot", "set", "set", "restore"] * 2
+
+
+def strip_config(**team_kw):
+    return Config(
+        GeneralConfig(True, "x.db"),
+        (BulbConfig("lamp", "1.1.1.1"), BulbConfig("strip", "1.1.1.2", kind="govee", segments=20)),
+        (TeamConfig("nfl", "9", "GB", ("lamp", "strip"), **team_kw),),
+        EffectConfig(),
+    )
+
+
+def test_planner_gives_each_bulb_its_own_pattern():
+    from app.bulbs.base import SegmentPattern
+    from app.effects import EffectLayer
+
+    store = Store()
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
+    cfg = strip_config(fixture_effects={"strip": EffectLayer("chase")})
+    plan = dict(make_planner(cfg, {}, store)(event()))
+    assert isinstance(plan["lamp"], Pattern)
+    assert isinstance(plan["strip"], SegmentPattern)
+    assert plan["strip"].segments == 20
+
+
+def test_planner_skips_a_bulb_whose_effect_cannot_be_built_and_keeps_the_rest(caplog):
+    from dataclasses import replace
+
+    from app.effects import EffectLayer
+
+    store = Store()
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
+    cfg = strip_config(fixture_effects={"strip": EffectLayer("chase")})
+    # the strip loses its segments after the effect was set (a settings edit)
+    cfg = replace(cfg, bulbs=(cfg.bulbs[0], replace(cfg.bulbs[1], segments=1)))
+    plan = make_planner(cfg, {}, store)(event())
+    assert [n for n, _ in plan] == ["lamp"]
+    assert "no effect" in caplog.text
+
+
+async def test_one_event_plays_different_patterns_on_two_bulbs():
+    from app.bulbs.base import SegmentPattern
+    from app.effects import EffectLayer
+
+    store = Store()
+    store.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
+    store.insert_event(event(due_in=0))
+    clock = Clock()
+    lamp = DryRunBulb("lamp", sleep=clock.sleep)
+    strip = DryRunBulb("strip", sleep=clock.sleep)
+    cfg = strip_config(fixture_effects={"strip": EffectLayer("chase")})
+    d = Dispatcher(store, {"lamp": lamp, "strip": strip},
+                   make_planner(cfg, {}, store), clock.now, clock.sleep)
+    d.schedule(event(due_in=0))
+    await d.wait_idle()
+    assert [c[0] for c in lamp.calls][:2] == ["snapshot", "set_color"]
+    assert [c[0] for c in strip.calls] == ["snapshot", "play_segments", "restore"]
+    assert isinstance(make_planner(cfg, {}, store)(event())[1][1], SegmentPattern)
+
+
+def test_bulb_pulse_uses_the_same_resolution_as_an_event():
+    from app.bulbs.base import SegmentPattern
+    from app.dispatch.dispatcher import make_bulb_pulse
+    from app.effects import EffectLayer
+
+    cfg = strip_config(fixture_effects={"strip": EffectLayer("chase")})
+    pulse = make_bulb_pulse(cfg, {})
+    assert isinstance(pulse("strip"), SegmentPattern)
+    assert isinstance(pulse("lamp"), Pattern)

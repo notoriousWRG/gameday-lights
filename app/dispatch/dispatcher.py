@@ -8,14 +8,16 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from app.bulbs.base import BulbAdapter, Color, Pattern
+from app.bulbs.base import BulbAdapter, Color, Pattern, SegmentPattern, capabilities_for
 from app.config import Config, TeamConfig
-from app.effects import build_pattern
+from app.effects import build_effect, build_pattern, resolve_effect
 from app.store import Event, Store
 
 log = logging.getLogger(__name__)
 
-Planner = Callable[[Event], tuple[Pattern, list[str]]]
+AnyPattern = Pattern | SegmentPattern
+Planner = Callable[[Event], list[tuple[str, AnyPattern]]]
+DEFAULT_COLORS: tuple[Color, Color] = ((0, 255, 0), (255, 255, 255))
 
 
 def utc_now() -> datetime:
@@ -39,25 +41,41 @@ def _provider(config: Config | Callable[[], Config]) -> Callable[[], Config]:
     return config if callable(config) else (lambda: config)
 
 
+def _fixture_pattern(
+    config: Config, team: TeamConfig, bulb_name: str, espn: tuple[Color, Color]
+) -> AnyPattern:
+    """The pattern `team` plays on one fixture: its resolved effect, built for that fixture."""
+    bulb = next((b for b in config.bulbs if b.name == bulb_name), None)
+    caps = capabilities_for(bulb.kind, bulb.segments) if bulb else capabilities_for("wiz")
+    resolved = resolve_effect(config, team, bulb_name, espn)
+    return build_effect(resolved.spec, resolved.primary, resolved.alternate, caps, bulb_name)
+
+
 def make_planner(
     config: Config | Callable[[], Config],
     team_colors: dict[tuple[str, str], tuple[Color, Color]],
     store: Store,
 ) -> Planner:
-    """Event -> (pattern, bulb names), from the current config plus ESPN team colors."""
+    """Event -> [(bulb name, pattern)], one entry per bulb of the team, from the current config
+    plus ESPN team colors. A bulb whose effect cannot be built is logged and left out; the
+    others still play."""
     current = _provider(config)
 
-    def plan(event: Event) -> tuple[Pattern, list[str]]:
+    def plan(event: Event) -> list[tuple[str, AnyPattern]]:
         config = current()
         game = store.get_game(event.game_id)
         if game is None:
             raise LookupError(f"unknown game {event.game_id}")
         for team in config.teams:
             if team.league == game.league and team.id == event.team_id:
-                primary, alternate = team_colors.get(
-                    (team.league, team.id), ((0, 255, 0), (255, 255, 255))
-                )
-                return resolve_pattern(config, team, primary, alternate), list(team.bulbs)
+                espn = team_colors.get((team.league, team.id), DEFAULT_COLORS)
+                plans: list[tuple[str, AnyPattern]] = []
+                for name in team.bulbs:
+                    try:
+                        plans.append((name, _fixture_pattern(config, team, name, espn)))
+                    except ValueError as e:
+                        log.error("no effect for %s on bulb %s: %s", event.dedupe_key, name, e)
+                return plans
         raise LookupError(f"team {game.league}/{event.team_id} is not followed")
 
     return plan
@@ -66,19 +84,37 @@ def make_planner(
 def make_bulb_pulse(
     config: Config | Callable[[], Config],
     team_colors: dict[tuple[str, str], tuple[Color, Color]],
-) -> Callable[[str], Pattern]:
-    """Bulb name -> the pattern a pulse check plays: the first team using it, else the default."""
+) -> Callable[[str], AnyPattern]:
+    """Bulb name -> the pattern a pulse check plays: what the first team using it plays there
+    (the same resolution a real event uses), else the default."""
     current = _provider(config)
 
-    def pattern_for(bulb: str) -> Pattern:
+    def pattern_for(bulb: str) -> AnyPattern:
         config = current()
         for team in config.teams:
             if bulb in team.bulbs:
-                primary, alternate = team_colors.get(
-                    (team.league, team.id), ((0, 255, 0), (255, 255, 255))
-                )
-                return resolve_pattern(config, team, primary, alternate)
-        return build_pattern(config.score_effect, (0, 255, 0), (255, 255, 255))
+                espn = team_colors.get((team.league, team.id), DEFAULT_COLORS)
+                return _fixture_pattern(config, team, bulb, espn)
+        return build_pattern(config.score_effect, *DEFAULT_COLORS)
+
+    return pattern_for
+
+
+def make_cell_pattern(
+    config: Config | Callable[[], Config],
+    team_colors: dict[tuple[str, str], tuple[Color, Color]],
+) -> Callable[[str, str, str], AnyPattern]:
+    """(league, team id, bulb) -> the pattern that team plays on that bulb: exactly what a real
+    event would play there. KeyError if the team is not followed or does not use the bulb."""
+    current = _provider(config)
+
+    def pattern_for(league: str, team_id: str, bulb: str) -> AnyPattern:
+        config = current()
+        for team in config.teams:
+            if (team.league, team.id) == (league, team_id) and bulb in team.bulbs:
+                espn = team_colors.get((league, team_id), DEFAULT_COLORS)
+                return _fixture_pattern(config, team, bulb, espn)
+        raise KeyError(f"{league}/{team_id} on {bulb}")
 
     return pattern_for
 
@@ -144,7 +180,7 @@ class Dispatcher:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def play_now(self, bulb_name: str, pattern: Pattern) -> datetime:
+    async def play_now(self, bulb_name: str, pattern: AnyPattern) -> datetime:
         """Play a pattern on one bulb right now (a manual pulse check); returns its start time.
 
         Uses the same per-bulb queue and snapshot/restore as real events, so it never
@@ -177,9 +213,10 @@ class Dispatcher:
         if wait > 0:
             await self._sleep(wait)
         try:
-            pattern, names = self._planner(event)
+            plan = self._planner(event)
+            names = [n for n, _ in plan]
             results = await asyncio.gather(
-                *(self._play(n, pattern) for n in names), return_exceptions=True
+                *(self._play(n, pattern) for n, pattern in plan), return_exceptions=True
             )
         except Exception:
             log.exception("could not plan event %s", event.dedupe_key)
@@ -196,13 +233,13 @@ class Dispatcher:
         else:
             self._store.mark_event(event.dedupe_key, "failed")
 
-    async def _play(self, name: str, pattern: Pattern) -> datetime:
+    async def _play(self, name: str, pattern: AnyPattern) -> datetime:
         bulb = self._bulbs[name]
         async with self._locks[name]:
             started = self._now()
             snap = await bulb.snapshot()
             try:
-                await bulb.flash(pattern)
+                await bulb.play(pattern)
             finally:
                 await bulb.restore(snap)
             return started

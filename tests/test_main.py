@@ -100,9 +100,15 @@ def test_discover(monkeypatch, capsys):
     async def fake(broadcast_space, wait_time):
         return [SimpleNamespace(ip="1.2.3.4", mac="aabbccddeeff")]
 
+    async def fake_govee():
+        return [{"ip": "1.2.3.5", "mac": "0da8de99c4c6475f"}]
+
     monkeypatch.setattr("pywizlight.discovery.discover_lights", fake)
+    monkeypatch.setattr("app.main.discover_govee", fake_govee)
     assert main(["discover"]) == 0
-    assert "1.2.3.4  mac aabbccddeeff" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "1.2.3.4  mac aabbccddeeff" in out
+    assert "1.2.3.5  govee id 0da8de99c4c6475f" in out
 
 
 def test_help_lists_commands(capsys):
@@ -278,3 +284,51 @@ async def test_live_apply_pushes_settings_edits_into_the_running_components(env)
     service.update("household", {"delay_s": 20}, 1)  # a delay edit needs neither
     assert watcher._sync_requested is False and service.config.general.delay_s == 20
     store.close()
+
+
+def test_make_bulb_builds_the_adapter_for_its_kind():
+    from app.bulbs.govee import GoveeBulb
+    from app.config import BulbConfig
+
+    strip = app_main.make_bulb(BulbConfig("strip", "10.0.0.5", port=4003, kind="govee"), False)
+    assert isinstance(strip, GoveeBulb) and strip.ip == "10.0.0.5"
+    dry = app_main.make_bulb(BulbConfig("strip", "10.0.0.5", kind="govee"), True)
+    assert type(dry).__name__ == "DryRunBulb"
+
+
+async def test_discover_all_tags_kinds_and_survives_one_brand_failing(monkeypatch):
+    from app.bulbs.wiz import BulbUnreachable
+
+    async def wiz(broadcast):
+        return [{"ip": "1.1.1.1", "mac": "aa"}]
+
+    async def govee():
+        return [{"ip": "1.1.1.2", "mac": "bb"}]
+
+    async def broken(*_):
+        raise BulbUnreachable("no route")
+
+    monkeypatch.setattr(app_main, "discover_wiz", wiz)
+    monkeypatch.setattr(app_main, "discover_govee", govee)
+    assert await app_main.discover_all() == [
+        {"ip": "1.1.1.1", "mac": "aa", "kind": "wiz"},
+        {"ip": "1.1.1.2", "mac": "bb", "kind": "govee"},
+    ]
+    monkeypatch.setattr(app_main, "discover_wiz", broken)
+    assert await app_main.discover_all() == [{"ip": "1.1.1.2", "mac": "bb", "kind": "govee"}]
+    monkeypatch.setattr(app_main, "discover_govee", broken)
+    with pytest.raises(BulbUnreachable, match="no route"):
+        await app_main.discover_all()
+
+
+def test_make_bulb_passes_segments_to_the_strip_and_to_its_dry_run_stand_in():
+    from app.bulbs.govee import GoveeBulb
+    from app.config import BulbConfig
+
+    strip = app_main.make_bulb(
+        BulbConfig("strip", "10.0.0.5", port=4003, kind="govee", segments=20), False)
+    assert isinstance(strip, GoveeBulb) and strip.capabilities.segments == 20
+    dry = app_main.make_bulb(BulbConfig("strip", "10.0.0.5", kind="govee", segments=20), True)
+    assert dry.capabilities.segments == 20 and "chase" in dry.capabilities.kinds
+    lamp = app_main.make_bulb(BulbConfig("lamp", "10.0.0.6"), True)
+    assert lamp.capabilities.kinds == {"pulse"}

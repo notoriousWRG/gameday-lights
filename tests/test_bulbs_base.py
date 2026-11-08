@@ -83,3 +83,76 @@ async def test_ping_reachable_and_not():
     assert (await Fake(True).ping()) is not None
     assert await Fake(False).ping() is None
     assert await DryRunBulb("d").ping() == 0.0
+
+
+def test_capabilities_cannot_lower_the_cap():
+    from app.bulbs.base import MIN_HOLD_S, Capabilities
+
+    with pytest.raises(ValueError):
+        Capabilities(min_hold_s=MIN_HOLD_S / 2)
+    with pytest.raises(ValueError):
+        Capabilities(segments=0)
+
+
+def test_capabilities_for_kinds():
+    from app.bulbs.base import capabilities_for
+
+    assert capabilities_for("wiz", 20).kinds == {"pulse"}
+    assert capabilities_for("wiz", 20).segments == 1
+    assert capabilities_for("govee").kinds == {"pulse"}
+    assert capabilities_for("govee", 20).kinds == {"pulse", "chase"}
+    assert capabilities_for("govee", 20).segments == 20
+
+
+def _frames(*rows, hold=0.1):
+    from app.bulbs.base import SegmentFrame
+
+    return tuple(SegmentFrame(tuple(r), hold) for r in rows)
+
+
+def test_segment_pattern_duration_and_segments():
+    from app.bulbs.base import SegmentPattern
+
+    p = SegmentPattern(_frames([G, Y], [Y, G], hold=0.6))
+    assert p.segments == 2
+    assert p.duration_s == pytest.approx(1.2)
+
+
+def test_segment_pattern_cap_is_per_segment():
+    from app.bulbs.base import SegmentPattern
+
+    # each segment changes once per 0.6 s: fine
+    SegmentPattern(_frames([G, Y], [Y, G], [G, Y], hold=0.6))
+    # segment 0 changes every 0.1 s: over the cap
+    with pytest.raises(PatternError):
+        SegmentPattern(_frames([G, Y], [Y, Y], [G, Y], hold=0.1))
+
+
+def test_segment_pattern_rejects_ragged_and_empty():
+    from app.bulbs.base import SegmentPattern
+
+    with pytest.raises(PatternError):
+        SegmentPattern(())
+    with pytest.raises(PatternError):
+        SegmentPattern(_frames([G, Y], [G]))
+
+
+async def test_play_dispatches_on_pattern_type():
+    from app.bulbs.base import SegmentPattern
+
+    bulb = DryRunBulb("lamp")
+    await bulb.play(Pattern((Step(G, 0.6),)))
+    await bulb.play(SegmentPattern(_frames([G, Y])))
+    assert [c[0] for c in bulb.calls] == ["set_color", "play_segments"]
+
+
+async def test_adapter_without_segments_refuses_segment_patterns():
+    from app.bulbs.base import BulbAdapter, SegmentPattern
+
+    class Plain(BulbAdapter):
+        async def set_color(self, color, brightness=255): ...
+        async def snapshot(self): ...
+        async def restore(self, snapshot): ...
+
+    with pytest.raises(PatternError):
+        await Plain("x").play(SegmentPattern(_frames([G])))

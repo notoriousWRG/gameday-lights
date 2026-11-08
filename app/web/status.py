@@ -16,10 +16,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.bulbs.base import BulbAdapter, Pattern
+from app.bulbs.base import BulbAdapter, Pattern, SegmentPattern, capabilities_for
 from app.config import Config, ConfigError
 from app.dispatch.dispatcher import Dispatcher, utc_now
-from app.effects import parse_color
+from app.effects import CHASE_DEFAULTS, effect_layers, parse_color, resolve_effect
 from app.espn.client import LEAGUES, EspnClient, EspnError
 from app.espn.schedule import parse_team_list
 from app.settings import SECTIONS, error_location
@@ -45,6 +45,41 @@ def _color_or_none(value):
     if not isinstance(value, str):
         raise ValueError("color must be text")
     return parse_color(value)
+
+
+def _hex(color) -> str | None:
+    return "#{:02x}{:02x}{:02x}".format(*color) if color else None
+
+
+def describe_cell(config: Config, team, bulb) -> dict:
+    """What `team` plays on `bulb`, with the layer each setting comes from. The values come from
+    the same resolver a real event uses; only the origins are added here."""
+    caps = capabilities_for(bulb.kind, bulb.segments)
+    resolved = resolve_effect(config, team, bulb.name, ((0, 0, 0), (0, 0, 0)))
+    origin: dict[str, str] = {}
+    for name, layer in effect_layers(config, team, bulb.name):
+        if layer is None:
+            continue
+        if layer.kind:
+            origin["kind"] = name
+        for key in layer.params:
+            origin[key] = name
+        for key, value in (("color", layer.color), ("alt_color", layer.alt_color)):
+            if value:
+                origin[key] = name
+    spec = resolved.spec
+    values = {**(CHASE_DEFAULTS if spec.kind == "chase" else {}), **spec.params}
+    params = {k: {"value": v, "from": origin.get(k, "built-in")}
+              for k, v in values.items() if k != "brightness"}
+    return {
+        "league": team.league, "id": team.id, "abbr": team.abbr, "bulb": bulb.name,
+        "segments": bulb.segments, "kinds": sorted(caps.kinds),
+        "kind": spec.kind, "kind_from": origin.get("kind", "built-in"), "params": params,
+        "color": {"value": _hex(resolved.primary) if "color" in origin else None,
+                  "from": origin.get("color")},
+        "alt_color": {"value": _hex(resolved.alternate) if "alt_color" in origin else None,
+                      "from": origin.get("alt_color")},
+    }
 
 
 def _resolve(value):
@@ -293,6 +328,7 @@ def create_app(
     espn: EspnClient | None = None,
     discover_bulbs: Callable[[], Awaitable[list[dict]]] | None = None,
     team_pulse: Callable[..., Pattern] | None = None,
+    cell_pattern: Callable[[str, str, str], Pattern | SegmentPattern] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Gameday Lights status", docs_url=None, redoc_url=None, openapi_url=None)
     pings = BulbPings(bulbs)
@@ -303,6 +339,15 @@ def create_app(
     last_pulse: dict[str, float] = {}  # bulb -> clock() when its last pulse ended
 
     # async handlers only: the sqlite connection belongs to the event loop thread
+    @app.get("/api/effects/matrix")
+    async def effects_matrix() -> dict:
+        """Every followed team x the bulbs it uses: the effect it plays there and where each
+        setting comes from (default, fixture, team or team x fixture)."""
+        config = _resolve(cfg)
+        by_name = {b.name: b for b in config.bulbs}
+        return {"cells": [describe_cell(config, t, by_name[n])
+                          for t in config.teams for n in t.bulbs if n in by_name]}
+
     @app.get("/api/status")
     async def status() -> dict:
         return build_status(store, _resolve(cfg), stats, await pings.get(), dry_run, now())
@@ -342,6 +387,33 @@ def create_app(
             log.info("pulse check on %s (%.1fs)", name, pattern.duration_s)
             return {"ok": True, "dry_run": dry_run, "duration_s": pattern.duration_s,
                     "started_at": _iso(started)}
+
+        if cell_pattern is not None:
+
+            @app.post("/api/effects/test")
+            async def test_cell(request: Request) -> dict:
+                """Play what one team plays on one bulb, the saved effect, with the same guards,
+                queue and snapshot/restore as the pulse check."""
+                if request.headers.get("x-gameday") != "1":
+                    raise HTTPException(403, "missing X-Gameday header")
+                try:
+                    body = await request.json()
+                    league, team_id, name = str(body["league"]), str(body["id"]), str(body["bulb"])
+                except (ValueError, KeyError, TypeError):
+                    raise HTTPException(
+                        400, 'body must be {"league", "id", "bulb"}') from None
+                ready(name)
+                try:
+                    pattern = cell_pattern(league, team_id, name)
+                except KeyError:
+                    raise HTTPException(404, "that team does not use that bulb") from None
+                except ValueError as e:
+                    raise HTTPException(422, f"cannot build that effect: {e}") from None
+                started = await play(name, pattern)
+                log.info("effect test %s/%s on %s (%.1fs)", league, team_id, name,
+                         pattern.duration_s)
+                return {"ok": True, "dry_run": dry_run, "duration_s": pattern.duration_s,
+                        "started_at": _iso(started)}
 
         if team_pulse is not None:
 
@@ -550,8 +622,8 @@ def _add_discover_route(app: FastAPI, discover_bulbs, cfg) -> None:
 
             match = next((s for s in stored if (s.mac and norm(s.mac) == b["mac"])
                           or (not s.mac and s.ip == b["ip"])), None)
-            out.append({"ip": b["ip"], "mac": b["mac"], "known": match is not None,
-                        "name": match.name if match else None})
+            out.append({"ip": b["ip"], "mac": b["mac"], "kind": b.get("kind", "wiz"),
+                        "known": match is not None, "name": match.name if match else None})
         return out
 
 

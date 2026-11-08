@@ -17,6 +17,7 @@ import copy
 from pathlib import Path
 
 from app.config import Config, ConfigError, parse_config
+from app.effects import KIND_PARAMS
 
 SECTIONS = ("bulbs", "teams", "effects", "household", "advanced")
 
@@ -26,8 +27,9 @@ _ALLOWED = {
     "household": {"delay_s"},
     "advanced": {*_ADVANCED_GENERAL, *_ADVANCED_WEB},
 }
-_BULB_KEYS = {"name", "ip", "mac", "port", "signing_key"}
-_TEAM_KEYS = {"league", "id", "abbr", "bulbs", "color", "alt_color"}
+_BULB_KEYS = {"name", "ip", "mac", "port", "signing_key", "kind", "segments"}
+_TEAM_KEYS = {"league", "id", "abbr", "bulbs", "color", "alt_color", "effects", "fixture_effects"}
+_LAYER_FIELDS = {"kind", "color", "alt_color", *set().union(*KIND_PARAMS.values())}
 _EFFECT_KEYS = {"pulses", "duration_s", "color", "alt_color", "brightness"}
 SECRET = "signing_key"
 
@@ -45,12 +47,40 @@ def machine_raw_from_config(cfg: Config) -> dict:
     }
 
 
+def _layer_dict(layer, colors: bool = True) -> dict:
+    out: dict = {}
+    if layer.kind:
+        out["kind"] = layer.kind
+    out.update(layer.params)
+    if colors:
+        for key, color in (("color", layer.color), ("alt_color", layer.alt_color)):
+            if color:
+                out[key] = _hex(color)
+    return out
+
+
 def sections_from_config(cfg: Config) -> dict[str, object]:
-    """Complete, normalized, JSON-safe sections for a config."""
+    """Complete, normalized, JSON-safe sections for a config. Effect layers that are not set are
+    left out, so a config without them looks exactly as it did before they existed."""
     g, w, e = cfg.general, cfg.web, cfg.score_effect
+    sections = _base_sections(cfg, g, w, e)
+    for team, out in zip(cfg.teams, sections["teams"], strict=True):  # type: ignore[arg-type]
+        if team.effect:
+            out["effects"] = _layer_dict(team.effect, colors=False)
+        if team.fixture_effects:
+            out["fixture_effects"] = {n: _layer_dict(x) for n, x in team.fixture_effects.items()}
+    if cfg.fixture_effects:
+        sections["effects"]["fixtures"] = {  # type: ignore[index]
+            n: _layer_dict(x) for n, x in cfg.fixture_effects.items()
+        }
+    return sections
+
+
+def _base_sections(cfg: Config, g, w, e) -> dict[str, object]:
     return {
         "bulbs": [
-            {"name": b.name, "ip": b.ip, "mac": b.mac, "port": b.port, "signing_key": b.signing_key}
+            {"name": b.name, "ip": b.ip, "mac": b.mac, "port": b.port, "signing_key": b.signing_key,
+             "kind": b.kind, "segments": b.segments}
             for b in cfg.bulbs
         ],
         "teams": [
@@ -77,6 +107,24 @@ def _unknown(path: str, value: dict, allowed: set[str]) -> None:
         raise ConfigError(f"{path}: unknown field {extra[0]!r}")
 
 
+def _check_layers(path: str, layers: object) -> None:
+    if not isinstance(layers, dict):
+        raise ConfigError(f"{path}: must be an object")
+    for name, layer in layers.items():
+        if not isinstance(layer, dict):
+            raise ConfigError(f"{path}.{name}: must be an object")
+        _unknown(f"{path}.{name}", layer, _LAYER_FIELDS)
+
+
+def _check_team_layers(i: int, team: dict) -> None:
+    if "effects" in team:
+        if not isinstance(team["effects"], dict):
+            raise ConfigError(f"teams[{i}].effects: must be an object")
+        _unknown(f"teams[{i}].effects", team["effects"], _LAYER_FIELDS - {"color", "alt_color"})
+    if "fixture_effects" in team:
+        _check_layers(f"teams[{i}].fixture_effects", team["fixture_effects"])
+
+
 def check_section_shape(section: str, value: object) -> None:
     """Strict shape check for a section arriving from the UI: right container, no unknown fields."""
     if section not in SECTIONS:
@@ -89,11 +137,14 @@ def check_section_shape(section: str, value: object) -> None:
             if not isinstance(item, dict):
                 raise ConfigError(f"{section}[{i}]: must be an object")
             _unknown(f"{section}[{i}]", item, allowed)
+            if section == "teams":
+                _check_team_layers(i, item)
         return
     if not isinstance(value, dict):
         raise ConfigError(f"{section}: must be an object")
     if section == "effects":
-        _unknown("effects", value, {"score"})
+        _unknown("effects", value, {"score", "fixtures"})
+        _check_layers("effects.fixtures", value.get("fixtures", {}))
         score = value.get("score", {})
         if not isinstance(score, dict):
             raise ConfigError("effects.score: must be an object")
