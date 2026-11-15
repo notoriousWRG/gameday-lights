@@ -70,3 +70,28 @@ Resolved by the probes (2026-11-08):
 - **Per-segment control works on the H616D** through the unofficial "razer" streaming mode (C51): packet `BB 00 <size> <cmd> <data> <xor>` base64 in a `razer` message to port 4003, enable `B1`, LED data `B0`. A green/gold chase of 4-segment chunks at 4 segments/s looked good, with no fade. Streaming applies instantly, drops back to normal after about a minute without frames, and hides app scenes while active. Gold `(255, 140, 0)` reads better than `(255, 182, 18)`, which washed toward white
 - **Restore from scenes.** A strip left in a scene or music mode comes back as a plain color
 - **Per-team colors per fixture.** Layer it in, or leave it out of the first cut
+
+
+## Practice mode (built 2026-11-15)
+
+| Topic | Decision |
+|---|---|
+| Source | No extra ESPN calls: plays are read from the scoreboard the poll already fetches (`situation.lastPlay`, falling back to down-and-distance text plus period and clock) |
+| Storage | `play` events with status `practice`, never scheduled, never fired. Left out of the status page's recent events. Keyed `play:<game>:<play id>` (a timestamp when ESPN sends no id) so a restart cannot collide with earlier plays. Deleted after 7 days at startup |
+| Lifetime | In memory only. Starts from the Calibrate screen for `[web] practice_minutes` (1 to 120, default 20), needs a followed game in its watch window, ends on time, on stop, or on restart |
+| Use | Play lag is a starting estimate only: **Use as starting delay** sets the general delay, never a kind's own delay, and a play reading never changes a score's suggestion |
+| Calibrate list | Marked rows stay for 12 hours (to undo). An unmarked row loses its button after `[web] mark_window_min` (default 5) minutes, or once a later one is marked; the server refuses a mark past the window. Readings keep counting |
+| No-bulb teams | A team with no bulbs is recorded as `no_lights` and nothing flashes. Settings saves drop a removed bulb's per-team and global effect settings |
+| Unverified | `lastPlay` has never been seen on a live board; the tests use a hand-built one. Card 84 replaces it with a recording |
+
+## Packaging and distribution (2026-11-15)
+
+| Topic | Decision |
+| --- | --- |
+| Install path | One bootstrap script per OS (`bootstrap.sh`, `bootstrap.ps1`): installs uv, then `uv tool install` of the tagged release wheel, `init`, and a per-user login service (launchd, systemd --user, Task Scheduler). No PyInstaller/.exe: avoids antivirus, SmartScreen and notarization work |
+| Rollout | Mac mini first, then Windows, then Linux |
+| State location | Per-OS data dir (`GAMEDAY_HOME` / `--data-dir` override) holds `config.toml` and the database; nothing lives in the install |
+| Updates | Manual: rerun the bootstrap line or `gameday-lights update` (refuses mid-game, backs up the db first). Optional daily "update available" note, off by default; never installs by itself |
+| Releases | Public GitHub repo, tags `vX.Y.Z`, wheel and bootstrap scripts attached to the Release |
+| Docs | MkDocs on GitHub Pages for family and friends; project files (intent, plan, cards) stay unpublished |
+| New outbound call | GitHub Releases API, only when `[updates] check = true` (C99 updates CLAUDE.md) |
