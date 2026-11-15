@@ -1,0 +1,21 @@
+# Gameday Lights settings for this computer. `gameday-lights init` wrote this file.
+#
+# Only the machine's settings live here. Teams, bulbs, effects and the delay are set in the
+# web page (Teams, Bulbs, ...), not in this file. Relative paths resolve against this folder.
+
+[general]
+# Exactly one computer should drive a given bulb. false = log effects, don't send them.
+dispatch_enabled = true
+db_path = "gameday-lights.db"
+
+[web]
+# The page is only reachable from this computer. To use it from a phone or TV on your home
+# network, set host to this computer's LAN address (for example "192.168.1.20").
+# Never expose it to the internet: it has no login.
+enabled = true
+host = "127.0.0.1"
+port = 8787
+
+[health]
+# Optional alerts to whoever set this up. See the docs; leave as is to send nothing.
+# heartbeat_url = "https://hc-ping.com/your-uuid"

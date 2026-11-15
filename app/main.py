@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
@@ -31,12 +32,22 @@ from app.dispatch.dispatcher import (
     make_team_test,
     utc_now,
 )
+from app.doctor import (
+    FAIL,
+    check_broadcast_socket,
+    check_bulbs,
+    check_config,
+    check_data_dir,
+    check_espn,
+    check_port,
+)
 from app.effects import DEFAULT_COLORS
 from app.espn.client import EspnClient, EspnError
 from app.espn.replay import ReplayClient
 from app.espn.schedule import parse_team_colors
 from app.health import run_heartbeat
 from app.notify import HealthMonitor
+from app.paths import HOME_ENV, resolve_config_path, resolve_data_dir
 from app.settings import machine_raw_from_config
 from app.settings_service import SettingsService
 from app.store import Store
@@ -345,9 +356,59 @@ def config_command(args: argparse.Namespace, service: SettingsService) -> int:
     return 0
 
 
+STARTER = Path(__file__).with_name("starter.toml")
+
+
+def init_command(config_path: Path) -> int:
+    """Create the data folder and a starter settings file. Never overwrites an existing one."""
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists():
+        print(f"Settings file already exists, left untouched: {config_path}")
+    else:
+        config_path.write_text(STARTER.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"Created {config_path}")
+    host, port = "127.0.0.1", 8787
+    try:
+        web = load_config(config_path).web
+        host, port = web.host, web.port
+    except ConfigError as e:
+        print(f"Warning: {e}", file=sys.stderr)
+    print(f"Next: start it with `gameday-lights run`, then open http://{host}:{port}/")
+    return 0
+
+
+async def doctor_command(config_path: Path, data_dir: Path) -> int:
+    checks = [check_data_dir(data_dir)]
+    config_check, cfg = check_config(config_path)
+    checks.append(config_check)
+    if cfg is not None:
+        checks.append(check_port(cfg.web.host, cfg.web.port))
+        client = EspnClient()
+        try:
+            checks.append(await check_espn(lambda: client.scoreboard("nfl")))
+        finally:
+            await client.aclose()
+        checks.append(check_broadcast_socket())
+        if cfg.general.db_path.exists():  # the stored settings are the ones that run
+            service, store = open_settings(str(config_path))
+            try:
+                cfg = service.config
+            finally:
+                store.close()
+        checks += await check_bulbs(
+            cfg, lambda bulb: bulb.ping(), lambda b: make_bulb(b, False), discover_all)
+    for c in checks:
+        print(c.line())
+    failed = sum(c.status == FAIL for c in checks)
+    print("Everything looks good." if not failed else f"{failed} problem(s) found.")
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gameday-lights", description=__doc__)
-    p.add_argument("--config", default="config.toml")
+    p.add_argument("--config", help="settings file (default: ./config.toml if present, else the "
+                   "data folder's)")
+    p.add_argument("--data-dir", help="where this install keeps its files (or set GAMEDAY_HOME)")
     p.add_argument("--version", action="version", version=f"gameday-lights {app_version()}")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
@@ -364,6 +425,8 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--no-secrets", action="store_true", help="leave bulb signing keys out")
     im = csub.add_parser("import", help="replace stored settings with the values in config.toml")
     im.add_argument("--force", action="store_true", help="required: overwrites stored settings")
+    sub.add_parser("init", help="create the data folder and a starter settings file")
+    sub.add_parser("doctor", help="check this computer is ready (settings, ESPN, port, bulbs)")
     t = sub.add_parser("test-effect", help="play an effect on a team's bulbs")
     t.add_argument("effect", choices=["score"])
     t.add_argument("--team", required=True)
@@ -379,7 +442,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not args.verbose:  # httpx logs every request at INFO: one line per poll
         logging.getLogger("httpx").setLevel(logging.WARNING)
+    data_dir = resolve_data_dir(args.data_dir)
+    chosen = bool(args.data_dir or os.environ.get(HOME_ENV))
+    config_path = resolve_config_path(args.config, data_dir, data_dir_chosen=chosen)
+    args.config = str(config_path)
     try:
+        if args.command == "init":
+            return init_command(config_path)
+        if args.command == "doctor":
+            return asyncio.run(doctor_command(config_path, data_dir))
         if args.command == "discover":
             asyncio.run(discover(args.broadcast))
             return 0
@@ -402,7 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             store.close()
     except ConfigError as e:
-        print(f"config error: {e}", file=sys.stderr)
+        hint = "; run `gameday-lights init` to create one" if "not found" in str(e) else ""
+        print(f"config error: {e}{hint}", file=sys.stderr)
         return 2
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
