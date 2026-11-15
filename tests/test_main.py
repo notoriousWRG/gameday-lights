@@ -89,7 +89,7 @@ def test_replay_missing_dir_returns_2(env, capsys):
 def test_test_effect_dry_run(env, capsys):
     assert main(["--config", env.cfg, "test-effect", "score", "--team", "gb", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "GB: 10 steps over 6.0s on lamp (dry-run)" in out and "Done." in out
+    assert "GB on lamp: Pattern over 6.0s (dry-run)" in out and "Done." in out
 
 
 def test_test_effect_unknown_team(env, capsys):
@@ -219,7 +219,7 @@ def test_test_effect_uses_stored_settings_including_teams_only_added_through_the
     store.close()
     assert "NE" not in (env.tmp / "config.toml").read_text()  # not in the file
     assert main(["--config", env.cfg, "test-effect", "score", "--team", "NE", "--dry-run"]) == 0
-    assert "NE: 10 steps over 6.0s on lamp (dry-run)" in capsys.readouterr().out
+    assert "NE on lamp: Pattern over 6.0s (dry-run)" in capsys.readouterr().out
 
 
 def test_reconcile_bulbs_keeps_unchanged_adapters_and_replaces_changed_ones():

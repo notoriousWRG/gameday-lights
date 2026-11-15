@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE games (
@@ -67,6 +67,11 @@ CREATE TABLE settings_history (
     source     TEXT NOT NULL
 );
 CREATE INDEX settings_history_section ON settings_history (section, revision);
+"""
+
+
+_SCHEMA_V4 = """
+ALTER TABLE events ADD COLUMN seen_at TEXT;
 """
 
 
@@ -130,6 +135,13 @@ class Event:
     detail: dict = field(default_factory=dict)
     fired_at: datetime | None = None
     status: str = "pending"
+    seen_at: datetime | None = None  # when a person said the score showed on their TV (calibration)
+
+    @property
+    def lag_s(self) -> float | None:
+        """Seconds from the app detecting the score to it showing on the TV; negative if the TV
+        was ahead of ESPN. None until someone marks it seen."""
+        return (self.seen_at - self.detected_at).total_seconds() if self.seen_at else None
 
 
 def dedupe_key(game_id: str, team_id: str, n: int) -> str:
@@ -175,6 +187,10 @@ class Store:
             with self.db:
                 self.db.executescript(_SCHEMA_V3)
                 self.db.execute("PRAGMA user_version = 3")
+        if version < 4:
+            with self.db:
+                self.db.executescript(_SCHEMA_V4)
+                self.db.execute("PRAGMA user_version = 4")
 
     # games
     def upsert_game(self, g: Game) -> None:
@@ -256,6 +272,7 @@ class Store:
             dedupe_key=r["dedupe_key"], game_id=r["game_id"], team_id=r["team_id"],
             type=r["type"], detail=json.loads(r["detail"]), detected_at=_dt(r["detected_at"]),
             due_at=_dt(r["due_at"]), fired_at=_dt(r["fired_at"]), status=r["status"],
+            seen_at=_dt(r["seen_at"]),
         )
 
     def get_event(self, key: str) -> Event | None:
@@ -263,7 +280,43 @@ class Store:
         return self._event(r) if r else None
 
     def recent_events(self, limit: int = 25) -> list[Event]:
-        rows = self.db.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        """Newest events; practice-mode plays are not scores and are left out (see recent_plays)."""
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE type != 'play' ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._event(r) for r in rows]
+
+    def recent_plays(self, limit: int = 25) -> list[Event]:
+        """Plays recorded while practice mode was on, newest first."""
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE type = 'play' ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._event(r) for r in rows]
+
+    def prune_plays(self, before: datetime) -> int:
+        """Delete plays detected before `before`, so practice readings do not pile up all season."""
+        with self.db:
+            cur = self.db.execute(
+                "DELETE FROM events WHERE type = 'play' AND detected_at < ?", (_iso(before),)
+            )
+        return cur.rowcount
+
+    def mark_seen(self, key: str, when: datetime | None) -> bool:
+        """Record when the score showed on the TV (None clears it). False if no such event."""
+        with self.db:
+            cur = self.db.execute(
+                "UPDATE events SET seen_at=? WHERE dedupe_key=?",
+                (_iso(when) if when else None, key),
+            )
+        return cur.rowcount == 1
+
+    def seen_events(self, limit: int = 50, plays: bool = False) -> list[Event]:
+        """The most recent events someone marked as seen on the TV, newest first. Scores by
+        default; `plays=True` gives the practice-mode plays instead."""
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE seen_at IS NOT NULL AND (type = 'play') = ? "
+            "ORDER BY id DESC LIMIT ?", (1 if plays else 0, limit)
+        ).fetchall()
         return [self._event(r) for r in rows]
 
     def pending_events(self) -> list[Event]:

@@ -219,7 +219,7 @@ def test_v2_database_migrates_to_settings_tables(tmp_path):
     db.commit()
     db.close()
     s = Store(p)
-    assert s.db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert s.db.execute("PRAGMA user_version").fetchone()[0] == store_mod.SCHEMA_VERSION
     assert s.get_game("g1").name == "GB @ NE"
     assert s.put_setting("teams", [], 0, "seed", T0) == 1
 
@@ -236,3 +236,64 @@ def test_database_file_is_private_new_and_existing(tmp_path):
     loose.chmod(0o664)  # like a database created before settings were stored
     Store(loose).close()
     assert stat.S_IMODE(os.stat(loose).st_mode) == 0o600
+
+
+def test_v3_database_gains_seen_at_and_keeps_its_events(tmp_path):
+    import sqlite3
+
+    from app import store as store_mod
+
+    p = tmp_path / "v3.db"
+    db = sqlite3.connect(p)
+    for script in (store_mod._SCHEMA_V1, store_mod._SCHEMA_V2, store_mod._SCHEMA_V3):
+        db.executescript(script)
+    db.execute("INSERT INTO events (dedupe_key, game_id, team_id, type, detail, detected_at, "
+               "due_at, fired_at, status) VALUES ('g1:9:1','g1','9','score','{}',"
+               "'2026-11-08T18:00:00+00:00','2026-11-08T18:00:45+00:00',"
+               "'2026-11-08T18:00:46+00:00','fired')")
+    db.execute("PRAGMA user_version = 3")
+    db.commit()
+    db.close()
+    s = Store(p)
+    assert s.db.execute("PRAGMA user_version").fetchone()[0] == 4
+    e = s.get_event("g1:9:1")
+    assert e.status == "fired" and e.seen_at is None and e.lag_s is None
+    assert s.seen_events() == []
+
+
+def test_mark_seen_sets_clears_and_gives_the_lag():
+    s = Store()
+    s.upsert_game(Game("g1", "nfl", "GB @ NE", T0, "in"))
+    s.insert_event(ev(1))
+    s.insert_event(ev(2))
+    assert s.mark_seen(dedupe_key("g1", "9", 1), T0 + timedelta(seconds=52.5)) is True
+    assert s.mark_seen("nope", T0) is False
+    e = s.get_event(dedupe_key("g1", "9", 1))
+    assert e.seen_at == T0 + timedelta(seconds=52.5) and e.lag_s == 52.5
+    s.mark_seen(dedupe_key("g1", "9", 2), T0 - timedelta(seconds=5))
+    assert [x.dedupe_key for x in s.seen_events()] == [dedupe_key("g1", "9", 2),
+                                                        dedupe_key("g1", "9", 1)]
+    assert s.get_event(dedupe_key("g1", "9", 2)).lag_s == -5.0  # the TV was ahead of ESPN
+    assert s.mark_seen(dedupe_key("g1", "9", 1), None) is True
+    assert s.get_event(dedupe_key("g1", "9", 1)).seen_at is None
+    assert len(s.seen_events()) == 1
+
+
+def test_plays_stay_out_of_recent_events_and_old_ones_are_pruned():
+    from datetime import UTC, datetime, timedelta
+
+    from app.store import Event
+
+    store = Store()
+    t = datetime(2026, 11, 8, 20, 0, tzinfo=UTC)
+    store.insert_event(Event("g1:9:1", "g1", "9", "score", t, t, {"label": "TD"}))
+    for i, when in enumerate((t - timedelta(days=8), t), start=1):
+        store.insert_event(Event(f"play:g1:{i}", "g1", "", "play", when, when, {"text": "x"},
+                                 status="practice"))
+    assert [e.dedupe_key for e in store.recent_events()] == ["g1:9:1"]
+    assert [e.dedupe_key for e in store.recent_plays()] == ["play:g1:2", "play:g1:1"]
+    assert store.pending_events() == [] or all(e.type != "play" for e in store.pending_events())
+    assert store.prune_plays(t - timedelta(days=7)) == 1
+    assert [e.dedupe_key for e in store.recent_plays()] == ["play:g1:2"]
+    store.mark_seen("play:g1:2", t)
+    assert store.seen_events() == [] and len(store.seen_events(plays=True)) == 1

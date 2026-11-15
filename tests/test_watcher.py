@@ -500,3 +500,89 @@ async def test_run_loop_wakes_from_a_long_sleep_to_sync_a_newly_followed_team():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_an_extra_point_can_have_its_own_delay_while_a_touchdown_keeps_the_default():
+    from dataclasses import replace
+
+    w, store, _, disp, clock = build([make_board(0), make_board(6), make_board(7), make_board(10)])
+    base = config()
+    w._config_fn = lambda: replace(base, general=replace(base.general,
+                                                           delay_by_label={"PAT": 3.0}))
+    for _ in range(4):
+        await w.poll_once()
+    td, pat, fg = (store.get_event(f"g1:9:{i}") for i in (1, 2, 3))
+    assert (td.detail["label"], td.due_at - td.detected_at) == ("TD", timedelta(seconds=45))
+    assert (pat.detail["label"], pat.due_at - pat.detected_at) == ("PAT", timedelta(seconds=3))
+    assert (fg.detail["label"], fg.due_at - fg.detected_at) == ("FG", timedelta(seconds=45))
+
+
+def board_with_play(play_id, text="1st & 10 at GB 25", gb=0, period=1, clock="10:00"):
+    # Hand-built from ESPN's shape, not a recording (card 84 replaces this with a real board).
+    b = make_board(gb)
+    ev = b["events"][0]
+    ev["status"].update(period=period, displayClock=clock)
+    ev["competitions"][0]["situation"] = {
+        "downDistanceText": text, "lastPlay": {"id": play_id, "text": f"play {play_id}"}}
+    return b
+
+
+def plays(store):
+    return [(e.dedupe_key, e.status, e.detail["text"]) for e in reversed(store.recent_plays())]
+
+
+async def test_practice_off_records_no_plays():
+    w, store, *_ = build([board_with_play("1"), board_with_play("2")])
+    for _ in range(2):
+        await w.poll_once()
+    assert plays(store) == []
+
+
+async def test_practice_baselines_then_records_each_new_play_once_and_never_fires():
+    frames = [board_with_play("1"), board_with_play("1"), board_with_play("2", "2nd & 7 at GB 28"),
+              board_with_play("2", "2nd & 7 at GB 28"), board_with_play("3", "3rd & 2 at GB 33")]
+    w, store, _, disp, clock = build(frames, start=KICKOFF + timedelta(minutes=5))
+    w.start_practice(20)
+    for _ in range(5):
+        await w.poll_once()
+    assert plays(store) == [("play:g1:2", "practice", "2nd & 7 at GB 28"),
+                            ("play:g1:3", "practice", "3rd & 2 at GB 33")]
+    assert store.pending_events() == [] and store.recent_events() == []
+    assert disp._tasks == set()
+
+
+async def test_a_score_during_practice_still_fires_normally():
+    w, store, _, disp, _ = build([board_with_play("1"), board_with_play("2", gb=6)],
+                                 start=KICKOFF + timedelta(minutes=5))
+    w.start_practice(20)
+    for _ in range(2):
+        await w.poll_once()
+    assert keys(store) == ["g1:9:1", "play:g1:2"]
+    await disp.wait_idle()
+    assert store.get_event("g1:9:1").status == "dry_run"
+
+
+async def test_practice_without_a_play_id_falls_back_to_situation_period_and_clock():
+    def board(text, clock):
+        b = board_with_play("x", text, clock=clock)
+        del b["events"][0]["competitions"][0]["situation"]["lastPlay"]
+        return b
+
+    frames = [board("1st & 10", "10:00"), board("1st & 10", "10:00"), board("2nd & 4", "9:31")]
+    w, store, *_ = build(frames, start=KICKOFF + timedelta(minutes=5))
+    w.start_practice(20)
+    for _ in range(3):
+        await w.poll_once()
+    assert [p[1:] for p in plays(store)] == [("practice", "2nd & 4")]
+
+
+async def test_practice_ends_on_time_and_when_stopped():
+    w, store, _, _, clock = build([board_with_play("1")], start=KICKOFF + timedelta(minutes=5))
+    until = w.start_practice(20)
+    assert w.practice_active() and until == clock.now() + timedelta(minutes=20)
+    clock.t = until
+    assert not w.practice_active() and w.practice_until is None
+    w.start_practice(5)
+    w.stop_practice()
+    assert not w.practice_active()
+    assert not w.can_practice()  # no poll yet, so no game is known to be in its window

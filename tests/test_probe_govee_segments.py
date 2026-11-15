@@ -69,3 +69,17 @@ async def test_probe_enables_streams_then_disables_and_restores(monkeypatch):
     cmds = [m["cmd"] for m in t.sent]
     assert cmds[-1] == "colorwc"  # restore last
     assert "razer" in cmds
+
+
+async def test_probe_sets_device_brightness_before_streaming(monkeypatch):
+    async def instant(_):
+        return None
+
+    monkeypatch.setattr(probe.asyncio, "sleep", instant)
+    t = FakeTransport()
+    args = SimpleNamespace(ip="10.0.0.5", port=4003, segments=6, chase=None, chunk=2, speed=2.0,
+                           seconds=0.0, brightness=70)
+    assert await probe.probe(args, t) == 0
+    cmds = [(m["cmd"], m["data"]) for m in t.sent]
+    assert ("brightness", {"value": 70}) in cmds
+    assert cmds.index(("brightness", {"value": 70})) < [c for c, _ in cmds].index("razer")

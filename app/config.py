@@ -10,6 +10,7 @@ from typing import Any
 
 from app.bulbs.base import PatternError, capabilities_for
 from app.effects import (
+    DEFAULT_COLORS,
     KIND_PARAMS,
     EffectConfig,
     EffectLayer,
@@ -31,6 +32,8 @@ class GeneralConfig:
     dispatch_enabled: bool
     db_path: Path
     delay_s: float = 45.0
+    # A different delay for one kind of score ("PAT", "FG", ...); others use delay_s.
+    delay_by_label: Mapping[str, float] = field(default_factory=dict)
     schedule_sync_hours: float = 6.0
     watch_lead_min: float = 10.0
     poll_live_s: float = 15.0
@@ -71,6 +74,8 @@ class WebConfig:
     port: int = 8787
     pulse_cooldown_s: float = 10.0
     final_hold_min: float = 30.0
+    practice_minutes: float = 20.0  # how long practice mode stays on once started
+    mark_window_min: float = 5.0  # a score or play can be marked "seen on TV" this long after it
 
 
 @dataclass(frozen=True)
@@ -99,6 +104,26 @@ def _num(table: dict, key: str, default: float, where: str, minimum: float) -> f
     if v < minimum:
         raise ConfigError(f"{where}.{key}: must be >= {minimum:g} (got {v:g})")
     return float(v)
+
+
+MAX_LABEL_DELAY_S = 180  # the Settings slider's limit
+
+
+def _delay_by_label(table: object) -> dict[str, float]:
+    if not isinstance(table, dict):
+        raise ConfigError("general.delay_by_label: must be a table")
+    out: dict[str, float] = {}
+    for label, seconds in table.items():
+        where = f"general.delay_by_label.{label}"
+        if not isinstance(label, str) or not label.strip() or len(label) > 16:
+            raise ConfigError("general.delay_by_label: names must be 1-16 characters")
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            raise ConfigError(f"{where}: must be a number")
+        if not 0 <= seconds <= MAX_LABEL_DELAY_S:
+            raise ConfigError(
+                f"{where}: must be between 0 and {MAX_LABEL_DELAY_S} (got {seconds:g})")
+        out[label.strip()] = float(seconds)
+    return out
 
 
 def _segments(table: dict, kind: str, where: str) -> int:
@@ -192,6 +217,7 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
         dispatch_enabled=g["dispatch_enabled"],
         db_path=db,
         delay_s=_num(g, "delay_s", 45, "general", 0),
+        delay_by_label=_delay_by_label(g.get("delay_by_label", {})),
         schedule_sync_hours=_num(g, "schedule_sync_hours", 6, "general", 0.1),
         watch_lead_min=_num(g, "watch_lead_min", 10, "general", 0),
         poll_live_s=_num(g, "poll_live_s", 15, "general", MIN_POLL_S),
@@ -222,12 +248,14 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
     teams: list[TeamConfig] = []
     for i, t in enumerate(raw.get("teams", [])):
         where = f"teams[{i}]"
-        names = t.get("bulbs", [])
-        if not names or not isinstance(names, list):
+        names = t.get("bulbs", [])  # may be empty: the team is followed but lights nothing
+        if not isinstance(names, list):
             raise ConfigError(f"{where}.bulbs: list of bulb names required")
         for n in names:
             if not any(b.name == n for b in bulbs):
                 raise ConfigError(f"{where}.bulbs: unknown bulb {n!r}")
+        if len(set(names)) != len(names):
+            raise ConfigError(f"{where}.bulbs: a bulb is listed twice")
         fixture_effects = _layers(t.get("fixture_effects", {}), f"{where}.fixture_effects",
                                   tuple(names))
         team = TeamConfig(
@@ -272,10 +300,17 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
 
     cooldown = _num(w, "pulse_cooldown_s", 10, "web", 1)
     final_hold = _num(w, "final_hold_min", 30, "web", 0)
+    practice = _num(w, "practice_minutes", 20, "web", 1)
+    if practice > 120:
+        raise ConfigError("web.practice_minutes: must be between 1 and 120")
+    mark_window = _num(w, "mark_window_min", 5, "web", 1)
+    if mark_window > 60:
+        raise ConfigError("web.mark_window_min: must be between 1 and 60")
 
     config = Config(
         general, tuple(bulbs), tuple(teams), effect,
-        WebConfig(enabled, host, port, cooldown, final_hold), fixture_effects,
+        WebConfig(enabled, host, port, cooldown, final_hold, practice, mark_window),
+        fixture_effects,
     )
     _check_effects(config)
     return config
@@ -283,7 +318,7 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
 
 def _check_effects(config: Config) -> None:
     """Every team x fixture must resolve to an effect its fixture supports and the cap allows."""
-    colors = ((0, 255, 0), (255, 255, 255))
+    colors = DEFAULT_COLORS
     by_name = {b.name: b for b in config.bulbs}
     for i, team in enumerate(config.teams):
         for name in team.bulbs:

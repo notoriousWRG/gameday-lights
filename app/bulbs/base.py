@@ -51,6 +51,40 @@ class Pattern:
 
 
 @dataclass(frozen=True)
+class BulbState:
+    """A steady light setting (not an effect). None leaves that part of the bulb alone."""
+
+    on: bool | None = None
+    color: Color | None = None
+    color_temp_k: int | None = None  # white, in Kelvin; excludes `color`
+    brightness: int | None = None  # 1..255
+
+    def __post_init__(self) -> None:
+        if self.color is not None and self.color_temp_k is not None:
+            raise ValueError("set a color or a white temperature, not both")
+        if self.color is not None and (
+            len(self.color) != 3 or not all(0 <= c <= 255 for c in self.color)
+        ):
+            raise ValueError(f"bad color {self.color}")
+        if self.color_temp_k is not None and not 1000 <= self.color_temp_k <= 10000:
+            raise ValueError(f"bad color temperature {self.color_temp_k}")
+        if self.brightness is not None and not 1 <= self.brightness <= 255:
+            raise ValueError(f"bad brightness {self.brightness}")
+
+    def merged(self, new: BulbState) -> BulbState:
+        """This state with `new` applied on top (a new color replaces a white, and the reverse)."""
+        color, temp = self.color, self.color_temp_k
+        if new.color is not None:
+            color, temp = new.color, None
+        elif new.color_temp_k is not None:
+            color, temp = None, new.color_temp_k
+        return BulbState(
+            new.on if new.on is not None else self.on, color, temp,
+            new.brightness if new.brightness is not None else self.brightness,
+        )
+
+
+@dataclass(frozen=True)
 class SegmentFrame:
     colors: tuple[Color, ...]
     hold_s: float
@@ -171,6 +205,13 @@ class BulbAdapter(ABC):
     async def play_segments(self, pattern: SegmentPattern) -> None:
         raise PatternError(f"{self.name} cannot play per-segment patterns")
 
+    async def set_state(self, state: BulbState) -> None:
+        """Set a steady light state. Not an effect: nothing is snapshotted or restored."""
+        raise NotImplementedError(f"{self.name} cannot set a light state")
+
+    async def current_state(self) -> BulbState:
+        raise NotImplementedError(f"{self.name} cannot report a light state")
+
     async def flash(self, pattern: Pattern) -> None:
         for step in pattern.steps:
             t0 = time.monotonic()
@@ -189,6 +230,15 @@ class DryRunBulb(BulbAdapter):
         if capabilities is not None:
             self.capabilities = capabilities
         self.calls: list[tuple] = []
+        self.state = BulbState(on=True, color=(255, 255, 255), brightness=255)
+
+    async def set_state(self, state: BulbState) -> None:
+        self.calls.append(("set_state", state))
+        self.state = self.state.merged(state)
+        log.info("[dry-run %s] set_state %s", self.name, state)
+
+    async def current_state(self) -> BulbState:
+        return self.state
 
     async def play_segments(self, pattern: SegmentPattern) -> None:
         self.calls.append(("play_segments", len(pattern.frames), pattern.segments))

@@ -17,7 +17,7 @@ from pywizlight import PilotBuilder, wizlight
 from pywizlight.discovery import discover_lights
 from pywizlight.exceptions import WizLightError
 
-from app.bulbs.base import BulbAdapter, Capabilities, Color, Sleep, capabilities_for
+from app.bulbs.base import BulbAdapter, BulbState, Capabilities, Color, Sleep, capabilities_for
 
 log = logging.getLogger(__name__)
 
@@ -162,3 +162,27 @@ class WizBulb(BulbAdapter):
             await self._call(lambda b: b.turn_off())
         else:
             await self._call(lambda b: b.turn_on(pilot))
+
+    async def set_state(self, state: BulbState) -> None:
+        if state.on is False:
+            await self._call(lambda b: b.turn_off())
+            return
+        kwargs: dict[str, Any] = {}
+        if state.color is not None:
+            kwargs["rgb"] = state.color
+        elif state.color_temp_k is not None:
+            kwargs["colortemp"] = state.color_temp_k
+        if state.brightness is not None:
+            kwargs["brightness"] = state.brightness
+        if not kwargs and state.on is None:
+            return
+        await self._call(lambda b: b.turn_on(PilotBuilder(**kwargs)))
+
+    async def current_state(self) -> BulbState:
+        snap = await self.snapshot()
+        lit = snap.rgb and any(snap.rgb)
+        return BulbState(
+            on=snap.on, color=snap.rgb if lit else None,
+            color_temp_k=None if lit else (snap.colortemp or None),
+            brightness=snap.brightness,
+        )

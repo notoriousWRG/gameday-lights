@@ -8,32 +8,26 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from app.bulbs.base import BulbAdapter, Color, Pattern, SegmentPattern, capabilities_for
+from app.bulbs.base import (
+    BulbAdapter,
+    BulbState,
+    Color,
+    Pattern,
+    SegmentPattern,
+    capabilities_for,
+)
 from app.config import Config, TeamConfig
-from app.effects import build_effect, build_pattern, resolve_effect
+from app.effects import DEFAULT_COLORS, build_effect, build_pattern, resolve_effect
 from app.store import Event, Store
 
 log = logging.getLogger(__name__)
 
 AnyPattern = Pattern | SegmentPattern
 Planner = Callable[[Event], list[tuple[str, AnyPattern]]]
-DEFAULT_COLORS: tuple[Color, Color] = ((0, 255, 0), (255, 255, 255))
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def resolve_pattern(
-    config: Config, team: TeamConfig, primary: Color, alternate: Color
-) -> Pattern:
-    """Score pattern for a team: its config colors override the given (ESPN) ones."""
-    effect = config.score_effect
-    if team.color or team.alt_color:
-        effect = dataclasses.replace(
-            effect, color=team.color or effect.color, alt_color=team.alt_color or effect.alt_color
-        )
-    return build_pattern(effect, primary, alternate)
 
 
 def _provider(config: Config | Callable[[], Config]) -> Callable[[], Config]:
@@ -119,24 +113,25 @@ def make_cell_pattern(
     return pattern_for
 
 
-def make_team_pulse(
+def make_team_test(
     config: Config | Callable[[], Config],
     team_colors: dict[tuple[str, str], tuple[Color, Color]],
-) -> Callable[..., Pattern]:
-    """(league, team id, color, alt_color, espn colors) -> the pattern that team's score would play,
-    for colors that may not be saved yet. Precedence is the real one: the team's own colors, then
-    the effect's, then ESPN's (the given ones, else those already loaded, else green and white)."""
+) -> Callable[..., AnyPattern]:
+    """(league, team id, bulb, color, alt_color, espn colors) -> the pattern that team plays on
+    that bulb, with the team colors as given (they may not be saved yet). Everything else is the
+    saved resolution a real event uses; an unsaved team or bulb falls back to the defaults."""
     current = _provider(config)
 
     def pattern_for(
-        league: str, team_id: str, color: Color | None, alt_color: Color | None,
+        league: str, team_id: str, bulb: str, color: Color | None, alt_color: Color | None,
         espn: tuple[Color, Color] | None = None,
-    ) -> Pattern:
-        primary, alternate = espn or team_colors.get(
-            (league, team_id), ((0, 255, 0), (255, 255, 255))
-        )
-        team = TeamConfig(league, team_id, "", (), color, alt_color)
-        return resolve_pattern(current(), team, primary, alternate)
+    ) -> AnyPattern:
+        config = current()
+        saved = next((t for t in config.teams if (t.league, t.id) == (league, team_id)), None)
+        team = dataclasses.replace(saved or TeamConfig(league, team_id, "", (bulb,)),
+                                   color=color, alt_color=alt_color)
+        return _fixture_pattern(
+            config, team, bulb, espn or team_colors.get((league, team_id), DEFAULT_COLORS))
 
     return pattern_for
 
@@ -190,6 +185,22 @@ class Dispatcher:
             raise KeyError(bulb_name)
         return await self._play(bulb_name, pattern)
 
+    async def set_state(self, bulb_name: str, state: BulbState) -> datetime:
+        """Set a bulb's steady light state (a manual change, not an effect) on its queue: it waits
+        for any effect to finish and restore first, so it is never undone by one. Not an event."""
+        if bulb_name not in self._bulbs:
+            raise KeyError(bulb_name)
+        async with self._locks[bulb_name]:
+            started = self._now()
+            await self._bulbs[bulb_name].set_state(state)
+            return started
+
+    async def current_state(self, bulb_name: str) -> BulbState:
+        if bulb_name not in self._bulbs:
+            raise KeyError(bulb_name)
+        async with self._locks[bulb_name]:
+            return await self._bulbs[bulb_name].current_state()
+
     def recover(self) -> None:
         """After a restart: past-due pending events never fire; future ones do."""
         now = self._now()
@@ -214,6 +225,10 @@ class Dispatcher:
             await self._sleep(wait)
         try:
             plan = self._planner(event)
+            if not plan:
+                self._store.mark_event(event.dedupe_key, "no_lights")
+                log.info("event %s: the team has no lights, nothing to play", event.dedupe_key)
+                return
             names = [n for n, _ in plan]
             results = await asyncio.gather(
                 *(self._play(n, pattern) for n, pattern in plan), return_exceptions=True

@@ -18,7 +18,6 @@ from app.config import (
     BulbConfig,
     Config,
     ConfigError,
-    TeamConfig,
     load_config,
     load_raw,
     parse_config,
@@ -28,10 +27,10 @@ from app.dispatch.dispatcher import (
     make_bulb_pulse,
     make_cell_pattern,
     make_planner,
-    make_team_pulse,
-    resolve_pattern,
+    make_team_test,
     utc_now,
 )
+from app.effects import DEFAULT_COLORS
 from app.espn.client import EspnClient, EspnError
 from app.espn.replay import ReplayClient
 from app.espn.schedule import parse_team_colors
@@ -182,6 +181,7 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
         dispatcher = Dispatcher(store, make_bulbs(cfg, dry), make_planner(current, colors, store),
                                 dry_run=dry)
         dispatcher.recover()
+        store.prune_plays(utc_now() - timedelta(days=7))  # practice readings are short-lived
         watcher = Watcher(current, store, client, dispatcher, utc_now)
         service.subscribe(make_live_apply(watcher, dispatcher, colors, client, dry, background))
         tasks = [asyncio.ensure_future(watcher.run())]
@@ -189,8 +189,8 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
             app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
                              dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
                              settings=service, espn=client, discover_bulbs=discover_all,
-                             team_pulse=make_team_pulse(current, colors),
-                             cell_pattern=make_cell_pattern(current, colors))
+                             team_test=make_team_test(current, colors),
+                             cell_pattern=make_cell_pattern(current, colors), practice=watcher)
             tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
         await run_tasks(tasks)
     finally:
@@ -282,19 +282,21 @@ async def test_effect(cfg: Config, abbr: str, dry_run: bool) -> int:
     if team is None:
         print(f"Team {abbr!r} is not in the config.", file=sys.stderr)
         return 2
-    colors = ((0, 255, 0), (255, 255, 255))
+    colors = DEFAULT_COLORS
     if not (team.color and team.alt_color):
         client = EspnClient()
         try:
             colors = (await fetch_team_colors(cfg, client)).get((team.league, team.id), colors)
         finally:
             await client.aclose()
-    pattern = resolve_pattern(cfg, team, *colors)
+    pattern_for = make_cell_pattern(cfg, {(team.league, team.id): colors})
+    patterns = {n: pattern_for(team.league, team.id, n) for n in team.bulbs}
     dry = dry_run or not cfg.general.dispatch_enabled
     bulbs = make_bulbs(cfg, dry, _instant if dry else asyncio.sleep)
-    print(f"{team.abbr}: {len(pattern.steps)} steps over {pattern.duration_s:.1f}s on "
-          f"{', '.join(team.bulbs)}{' (dry-run)' if dry else ''}")
-    await _play(bulbs, team, pattern)
+    for name, pattern in patterns.items():
+        print(f"{team.abbr} on {name}: {type(pattern).__name__} over {pattern.duration_s:.1f}s"
+              f"{' (dry-run)' if dry else ''}")
+    await _play(bulbs, patterns)
     print("Done.")
     return 0
 
@@ -303,15 +305,15 @@ async def _instant(seconds: float) -> None:
     await asyncio.sleep(0)
 
 
-async def _play(bulbs: dict[str, BulbAdapter], team: TeamConfig, pattern) -> None:
-    async def one(b: BulbAdapter) -> None:
+async def _play(bulbs: dict[str, BulbAdapter], patterns: dict) -> None:
+    async def one(b: BulbAdapter, pattern) -> None:
         snap = await b.snapshot()
         try:
-            await b.flash(pattern)
+            await b.play(pattern)
         finally:
             await b.restore(snap)
 
-    await asyncio.gather(*(one(bulbs[n]) for n in team.bulbs))
+    await asyncio.gather(*(one(bulbs[n], p) for n, p in patterns.items()))
 
 
 def config_command(args: argparse.Namespace, service: SettingsService) -> int:

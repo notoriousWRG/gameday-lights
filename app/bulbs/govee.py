@@ -18,11 +18,13 @@ import logging
 import socket
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.bulbs.base import (
     BulbAdapter,
+    BulbState,
     Color,
     PatternError,
     SegmentPattern,
@@ -40,12 +42,23 @@ COMMAND_PORT = 4003
 RAZER_ENABLE = 0xB1
 RAZER_LED_DATA = 0xB0
 RAZER_SETTLE_S = 0.3
+RESTORE_VERIFY_WAIT_S = 0.3  # let the strip apply the restore before reading it back
+RESTORE_ATTEMPTS = 3  # the restore, then up to two repeats if the strip did not take it
 STATUS_TIMEOUT_S = 2.0
 STATUS_ATTEMPTS = 2
 SCAN_WAIT_S = 3.0
 SCAN_RESEND_S = 1.0
+RESCAN_MIN_S = 30.0  # an off or gone strip must not cost a scan per command
 
 _reply_port_lock = asyncio.Lock()
+
+
+# Segments per model, only for models someone has verified on real hardware. Anything else is 1.
+SKU_SEGMENTS = {"H616D": 20}
+
+
+def segments_for_sku(sku: str | None) -> int:
+    return SKU_SEGMENTS.get((sku or "").upper(), 1)
 
 
 def _norm_id(device_id: str | None) -> str:
@@ -161,7 +174,8 @@ def _sort_key(b: dict) -> tuple:
 async def discover_govee(
     wait_time: float = SCAN_WAIT_S, transport: GoveeTransport | None = None
 ) -> list[dict]:
-    """Govee devices answering a LAN scan: [{"ip", "mac"}], one per device id, sorted by IP.
+    """Govee devices answering a LAN scan: [{"ip", "mac", "sku", "segments"}], one per device id,
+    sorted by IP. `segments` is the model's known segment count (1 if the model is not known).
 
     Govee has no MAC in the scan reply, so `mac` carries the device id (lowercase, no colons)."""
     try:
@@ -171,7 +185,9 @@ async def discover_govee(
     by_id: dict[str, dict] = {}
     for r in replies:
         ident = _norm_id(r.get("device"))
-        by_id.setdefault(ident or r["ip"], {"ip": r["ip"], "mac": ident})
+        sku = r.get("sku")
+        by_id.setdefault(ident or r["ip"], {
+            "ip": r["ip"], "mac": ident, "sku": sku, "segments": segments_for_sku(sku)})
     return sorted(by_id.values(), key=_sort_key)
 
 
@@ -191,6 +207,20 @@ def snapshot_from_status(data: dict) -> GoveeSnapshot:
         brightness=max(1, min(100, int(data.get("brightness", 100)))),
         colortemp=int(data.get("colorTemInKelvin", 0) or 0),
     )
+
+
+def _matches(now: GoveeSnapshot, want: GoveeSnapshot) -> bool:
+    """Whether the strip reads back as the snapshot (brightness may differ by rounding)."""
+    if now.on != want.on:
+        return False
+    if not want.on:
+        return True
+    if abs(now.brightness - want.brightness) > 1:
+        return False
+    if want.colortemp > 0:
+        return now.colortemp == want.colortemp
+    close = all(abs(a - b) <= 2 for a, b in zip(now.rgb, want.rgb, strict=True))
+    return now.colortemp == 0 and close
 
 
 def govee_brightness(brightness: int) -> int:
@@ -227,6 +257,7 @@ class GoveeBulb(BulbAdapter):
         timeout_s: float = STATUS_TIMEOUT_S,
         attempts: int = STATUS_ATTEMPTS,
         segments: int = 1,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(name, sleep)
         self.capabilities = capabilities_for("govee", segments)
@@ -236,16 +267,59 @@ class GoveeBulb(BulbAdapter):
         self._transport = transport or UdpTransport()
         self._timeout = timeout_s
         self._attempts = attempts
+        self._clock = clock
+        self._last_scan: float | None = None
         self._on: bool | None = None
         self._brightness: int | None = None
+
+    async def _rediscover(self) -> bool:
+        """Look for this strip by device id after it stopped answering at its IP (a DHCP change).
+        True when it was found at a different IP, which is now used. At most one scan per
+        RESCAN_MIN_S."""
+        if not self.mac:
+            return False
+        now = self._clock()
+        if self._last_scan is not None and now - self._last_scan < RESCAN_MIN_S:
+            return False
+        self._last_scan = now
+        log.warning("[%s] %s not answering; searching for device %s", self.name, self.ip, self.mac)
+        try:
+            found = await discover_govee(transport=self._transport)
+        except BulbUnreachable:
+            return False
+        for d in found:
+            if d["mac"] == self.mac and d["ip"] != self.ip:
+                log.warning("[%s] strip moved %s -> %s", self.name, self.ip, d["ip"])
+                self.ip = d["ip"]
+                self._on = self._brightness = None  # unknown now; the next command sends everything
+                return True
+        return False
 
     async def _send(self, cmd: str, data: dict) -> None:
         try:
             await self._transport.send(self.ip, self._port, _msg(cmd, data))
         except OSError as e:
+            if not await self._rediscover():
+                raise BulbUnreachable(f"{self.name} at {self.ip}: {e}") from e
+        else:
+            return
+        try:
+            await self._transport.send(self.ip, self._port, _msg(cmd, data))
+        except OSError as e:
             raise BulbUnreachable(f"{self.name} at {self.ip}: {e}") from e
 
-    async def _status(self) -> dict | None:
+    async def _status(self, rediscover: bool = True) -> dict | None:
+        try:
+            data = await self._query_status()
+        except BulbUnreachable:
+            if not (rediscover and await self._rediscover()):
+                raise
+            return await self._query_status()
+        if data is None and rediscover and await self._rediscover():
+            data = await self._query_status()
+        return data
+
+    async def _query_status(self) -> dict | None:
         for _ in range(self._attempts):
             try:
                 data = await self._transport.query(
@@ -269,7 +343,7 @@ class GoveeBulb(BulbAdapter):
     async def ping(self) -> float | None:
         t0 = time.monotonic()
         try:
-            data = await self._status()
+            data = await self._status(rediscover=False)
         except BulbUnreachable:
             return None
         return time.monotonic() - t0 if data is not None else None
@@ -304,10 +378,37 @@ class GoveeBulb(BulbAdapter):
                 await self._sleep(max(0.0, frame.hold_s - (time.monotonic() - t0)))
         finally:
             await self._send_packet(razer_packet(RAZER_ENABLE, [0]))
+            # The strip is still leaving streaming mode; commands sent right now (the restore) can
+            # be dropped, which left a strip stuck at full brightness once.
+            await self._sleep(RAZER_SETTLE_S)
 
     async def _send_packet(self, packet: bytes) -> None:
         msg = razer_message(packet)["msg"]
         await self._send(msg["cmd"], msg["data"])
+
+    async def set_state(self, state: BulbState) -> None:
+        if state.on is False:
+            await self._turn(False)
+            return
+        if state.on or state.color or state.color_temp_k or state.brightness:
+            if self._on is not True:
+                await self._turn(True)
+        if state.brightness is not None:
+            await self._set_brightness(govee_brightness(state.brightness))
+        if state.color is not None:
+            r, g, b = state.color
+            await self._send("colorwc", {"color": {"r": r, "g": g, "b": b}, "colorTemInKelvin": 0})
+        elif state.color_temp_k is not None:
+            await self._send("colorwc", {"color": {"r": 0, "g": 0, "b": 0},
+                                         "colorTemInKelvin": state.color_temp_k})
+
+    async def current_state(self) -> BulbState:
+        snap = await self.snapshot()
+        return BulbState(
+            on=snap.on, color=snap.rgb if snap.colortemp == 0 else None,
+            color_temp_k=snap.colortemp or None,
+            brightness=max(1, round(snap.brightness * 255 / 100)),
+        )
 
     async def snapshot(self) -> GoveeSnapshot:
         data = await self._status()
@@ -318,6 +419,24 @@ class GoveeBulb(BulbAdapter):
         return snap
 
     async def restore(self, snapshot: GoveeSnapshot) -> None:
+        """Put the strip back as it was, then read it back and repeat if it did not take.
+
+        Govee's LAN commands are plain UDP with no acknowledgement, and a command sent while the
+        strip is busy can be lost. A lost restore leaves a bright strip bright for the whole
+        evening, so this verifies instead of trusting."""
+        for attempt in range(RESTORE_ATTEMPTS):
+            await self._restore_once(snapshot)
+            await self._sleep(RESTORE_VERIFY_WAIT_S)
+            status = await self._status()
+            if status is not None and _matches(snapshot_from_status(status), snapshot):
+                return
+            if status is not None:
+                log.warning("[%s] restore did not take (attempt %d of %d)", self.name,
+                            attempt + 1, RESTORE_ATTEMPTS)
+                self._on = self._brightness = None  # unknown now; the repeat sends everything
+        log.error("[%s] could not confirm the restore after %d tries", self.name, RESTORE_ATTEMPTS)
+
+    async def _restore_once(self, snapshot: GoveeSnapshot) -> None:
         if not snapshot.on:
             await self._turn(False)
             return

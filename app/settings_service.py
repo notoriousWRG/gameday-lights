@@ -125,8 +125,17 @@ class SettingsService:
         stored = {name: (rev, val) for name, (rev, val) in self.sections().items()}
         if section == "bulbs":
             value = self._merge_bulb_secrets(value, stored.get("bulbs", (0, []))[1])
+        if section == "teams":
+            value = self._drop_stale_team_overrides(value)
         candidate = {name: val for name, (_, val) in stored.items()}
         candidate[section] = value
+        pruned_effects = None
+        if section == "bulbs" and "effects" in stored:
+            pruned_effects = self._drop_stale_fixture_effects(stored["effects"][1], value)
+            if pruned_effects != stored["effects"][1]:
+                candidate["effects"] = pruned_effects
+            else:
+                pruned_effects = None
         new_config = build_config(self._machine, candidate, self._base_dir)  # ConfigError: no write
         normalized = sections_from_config(new_config)[section]
 
@@ -134,10 +143,42 @@ class SettingsService:
         if current and current[0] == expected_revision and current[1] == normalized:
             return current[0], self.config  # nothing changed: no new revision, no history noise
         revision = self._write(section, normalized, expected_revision, source)  # RevisionConflict
+        if pruned_effects is not None:  # a removed bulb takes its effect settings with it
+            self._write("effects", sections_from_config(new_config)["effects"],
+                        stored["effects"][0], source)
 
         old, self._config = self.config, new_config
         self._notify(old, new_config)
         return revision, new_config
+
+    @staticmethod
+    def _drop_stale_team_overrides(teams: object) -> object:
+        """A team's per-bulb effect settings go when the bulb is taken off that team."""
+        if not isinstance(teams, list):
+            return teams
+        out = []
+        for t in teams:
+            if isinstance(t, dict) and isinstance(t.get("fixture_effects"), dict):
+                names = t.get("bulbs") if isinstance(t.get("bulbs"), list) else []
+                kept = {k: v for k, v in t["fixture_effects"].items() if k in names}
+                t = {k: v for k, v in t.items() if k != "fixture_effects"}
+                if kept:
+                    t["fixture_effects"] = kept
+            out.append(t)
+        return out
+
+    @staticmethod
+    def _drop_stale_fixture_effects(effects: object, bulbs: object) -> object:
+        """Global per-bulb effect settings go when the bulb is removed."""
+        if not isinstance(effects, dict) or not isinstance(effects.get("fixtures"), dict):
+            return effects
+        names = {b.get("name") for b in bulbs if isinstance(b, dict)} if isinstance(bulbs, list) \
+            else set()
+        kept = {k: v for k, v in effects["fixtures"].items() if k in names}
+        out = {k: v for k, v in effects.items() if k != "fixtures"}
+        if kept:
+            out["fixtures"] = kept
+        return out
 
     def rename_bulb(
         self, old: str, new: str, bulbs_revision: int, teams_revision: int, source: str = "ui"
@@ -244,6 +285,7 @@ def config_to_toml(cfg: Config, include_secrets: bool = True) -> str:
     machine = machine_raw_from_config(cfg)
     adv, hh = sections["advanced"], sections["household"]
     general = {**machine["general"], "delay_s": hh["delay_s"]}
+    by_label = hh.get("delay_by_label") or {}
     general.update({k: adv[k] for k in ("schedule_sync_hours", "watch_lead_min",
                                         "poll_live_s", "poll_break_s")})
     web = {**machine["web"], **{k: adv[k] for k in ("pulse_cooldown_s", "final_hold_min")}}
@@ -253,6 +295,8 @@ def config_to_toml(cfg: Config, include_secrets: bool = True) -> str:
         "# this file only seeds an empty database (or `config import --force`).",
         "",
         *_table("[general]", general),
+        *(_table("[general.delay_by_label]", {_key(k): v for k, v in by_label.items()})
+          if by_label else []),
     ]
     for bulb in sections["bulbs"]:
         if not include_secrets:

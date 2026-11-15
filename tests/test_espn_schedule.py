@@ -126,7 +126,7 @@ def test_parse_scoreboard_game_live_situation():
     g = parse_scoreboard_game(event)
     assert (g["clock"], g["period"], g["detail"]) == ("4:21", 3, "4:21 - 3rd")
     assert g["situation"] == {"text": "2nd & 7 at NE 35", "possession": "GB",
-                              "possession_text": None, "red_zone": True}
+                              "possession_text": None, "red_zone": True, "last_play": None}
     event["competitions"][0]["situation"] = {"lastPlay": {"x": 1}}  # unknown shape -> ignored
     assert parse_scoreboard_game(event)["situation"] is None
 
@@ -165,3 +165,14 @@ def test_parse_team_list_tolerates_missing_and_bad_colors_and_skips_inactive():
     assert (a["id"], a["color"], a["alt_color"]) == ("1", "#abcdef", None)  # id coerced to str
     assert (b["color"], b["alt_color"]) == (None, "#00ff00")
     assert parse_team_list({}) == []
+
+
+def test_last_play_is_read_defensively():
+    # Hand-built from ESPN's shape, not a recording (see card 84).
+    from app.espn.schedule import _last_play
+
+    assert _last_play({"id": 4012, "text": "Run"}) == {"id": "4012", "text": "Run"}
+    assert _last_play({"text": "Kickoff"}) == {"id": None, "text": "Kickoff"}
+    assert _last_play({"id": "7"}) == {"id": "7", "text": None}
+    for bad in (None, "text", ["x"], {}, {"x": 1}):
+        assert _last_play(bad) is None

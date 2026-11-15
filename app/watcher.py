@@ -68,6 +68,9 @@ class Watcher:
         self._sync_requested = False
         self.stats = WatcherStats(started_at=now())
         self._seen_status: dict[str, str] = {}  # game_id -> last status name logged
+        # Practice mode (in memory: a restart turns it off). Plays are recorded, never fired.
+        self.practice_until: datetime | None = None
+        self._play_sig: dict[str, tuple] = {}  # game_id -> signature of the last play seen
 
     @property
     def _cfg(self) -> Config:
@@ -92,6 +95,57 @@ class Watcher:
         followed = lambda c: {(t.league, t.id) for t in c.teams}  # noqa: E731
         if followed(old) != followed(new):
             self.request_sync()
+
+    # practice mode
+    def start_practice(self, minutes: float) -> datetime:
+        self.practice_until = self._now() + timedelta(minutes=minutes)
+        self._play_sig.clear()  # the first board seen after this only sets the baseline
+        return self.practice_until
+
+    def stop_practice(self) -> None:
+        self.practice_until = None
+        self._play_sig.clear()
+
+    def practice_active(self) -> bool:
+        if self.practice_until is None:
+            return False
+        if self._now() >= self.practice_until:
+            self.stop_practice()
+            return False
+        return True
+
+    def can_practice(self) -> bool:
+        """Is a followed game in its watch window (so there is a board to read plays from)?"""
+        return bool(self.stats.watching_ids)
+
+    def _capture_play(self, game: dict, now: datetime) -> None:
+        """Record a new play of a live game while practice is on. Reads only the board the poll
+        already fetched; touches no bulb."""
+        if game.get("state") != "in" or game.get("status_name") in BREAK_STATUSES:
+            return
+        sit = game.get("situation") or {}
+        play = sit.get("last_play") or {}
+        if play.get("id") is not None:
+            sig = ("id", play["id"])
+        elif sit.get("text"):
+            sig = ("text", sit["text"], game.get("period"), game.get("clock"))
+        else:
+            return
+        gid = game["game_id"]
+        previous = self._play_sig.get(gid)
+        self._play_sig[gid] = sig
+        if previous is None or previous == sig:
+            return
+        text = sit.get("text") or play.get("text")
+        key = f"play:{gid}:{play['id'] if play.get('id') is not None else int(now.timestamp())}"
+        event = Event(
+            dedupe_key=key, game_id=gid, team_id="", type="play", detected_at=now, due_at=now,
+            detail={"label": "Play", "text": text, "period": game.get("period"),
+                    "clock": game.get("clock"), "abbr": sit.get("possession")},
+            status="practice",
+        )
+        if self._store.insert_event(event):
+            log.info("practice: play %s (%s)", key, text)
 
     # schedule
     async def sync_schedule(self) -> None:
@@ -173,6 +227,8 @@ class Watcher:
         previous = self.stats.live.get(game["game_id"], {})
         ended = previous.get("ended_at") or (now if game["state"] == "post" else None)
         self.stats.live[game["game_id"]] = {**game, "updated_at": now, "ended_at": ended}
+        if self.practice_active():
+            self._capture_play(game, now)
 
     def _prune_live(self, now: datetime) -> None:
         for gid, g in list(self.stats.live.items()):
@@ -233,12 +289,13 @@ class Watcher:
 
     def _record(self, league, game_id, team_id, abbr, old, new, n, now, status) -> None:
         delta = new - old
+        label = score_label(league, delta)
+        general = self._cfg.general
         event = Event(
             dedupe_key=dedupe_key(game_id, team_id, n), game_id=game_id, team_id=team_id,
             type="score", detected_at=now,
-            due_at=now + timedelta(seconds=self._cfg.general.delay_s),
-            detail={"old": old, "new": new, "delta": delta,
-                    "label": score_label(league, delta), "abbr": abbr},
+            due_at=now + timedelta(seconds=general.delay_by_label.get(label, general.delay_s)),
+            detail={"old": old, "new": new, "delta": delta, "label": label, "abbr": abbr},
             status=status,
         )
         if not self._store.insert_event(event):

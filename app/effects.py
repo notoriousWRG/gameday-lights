@@ -20,6 +20,13 @@ if TYPE_CHECKING:
     from app.config import Config, TeamConfig
 
 FRAME_HZ = 10.0
+# Used when neither the config nor ESPN names colors.
+DEFAULT_COLORS: tuple[Color, Color] = ((0, 255, 0), (255, 255, 255))
+
+
+def to_hex(color: Color | None) -> str | None:
+    """"#rrggbb" for a color; None stays None."""
+    return "#{:02x}{:02x}{:02x}".format(*color) if color else None
 
 
 def parse_color(s: str) -> Color:

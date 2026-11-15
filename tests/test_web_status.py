@@ -1,60 +1,23 @@
 import asyncio
 import re
-from datetime import UTC, datetime, timedelta
-
-import httpx
+from datetime import timedelta
 
 from app.bulbs.base import DryRunBulb
 from app.config import BulbConfig, Config, GeneralConfig, TeamConfig
 from app.effects import EffectConfig
-from app.store import Event, Game, Store, dedupe_key
+from app.store import Game, Store
 from app.watcher import WatcherStats
 from app.web import status as web
 from app.web.status import BulbPings, create_app
-
-NOW = datetime(2026, 11, 8, 21, 40, tzinfo=UTC)
-
-
-def cfg():
-    return Config(
-        GeneralConfig(True, "x.db", delay_s=45),
-        (BulbConfig("lamp", "10.0.0.5"),),
-        (TeamConfig("nfl", "9", "GB", ("lamp",)),),
-        EffectConfig(),
-    )
-
-
-class Down(DryRunBulb):
-    async def ping(self):
-        return None
-
-
-def make(bulb=None, dry_run=False):
-    store = Store()
-    store.upsert_game(Game("g1", "nfl", "GB @ NE", NOW - timedelta(minutes=15), "in",
-                           "NE", 7, "GB", 10))
-    store.upsert_game(Game("g2", "nfl", "MIN @ GB", NOW + timedelta(days=7), "pre",
-                           "GB", None, "MIN", None))
-    store.upsert_game(Game("g0", "nfl", "GB @ MIN", NOW - timedelta(days=7), "post",
-                           "MIN", 20, "GB", 27))
-    store.upsert_game(Game("g9", "nfl", "GB @ CHI", NOW - timedelta(days=14), "post",
-                           "CHI", 24, "GB", 17))
-    store.upsert_game(Game("g8", "nfl", "GB @ DET", NOW - timedelta(days=21), "post",
-                           "DET", 20, "GB", 20))
-    detected = NOW - timedelta(minutes=2)
-    store.insert_event(Event(dedupe_key("g1", "9", 1), "g1", "9", "score", detected,
-                             detected + timedelta(seconds=45),
-                             {"abbr": "GB", "label": "TD", "delta": 6},
-                             fired_at=detected + timedelta(seconds=46), status="fired"))
-    stats = WatcherStats(started_at=NOW - timedelta(hours=1), last_poll_at=NOW, polls=5,
-                         watching=["GB @ NE"])
-    bulbs = {"lamp": bulb or DryRunBulb("lamp")}
-    return create_app(store, cfg(), stats, bulbs, dry_run, now=lambda: NOW)
-
-
-def client(app):
-    # same thread/event loop as the store, as in production (TestClient would use a worker thread)
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+from tests.support import (
+    NOW,
+    Down,
+    cfg,
+    client,
+    full_page,
+    make,
+    page_text,
+)
 
 
 async def test_status_json_shape():
@@ -119,7 +82,6 @@ async def test_pings_are_cached_then_refreshed():
 
 
 async def test_ping_timeout_counts_as_unreachable(monkeypatch):
-    import asyncio
 
     class Slow(DryRunBulb):
         async def ping(self):
@@ -145,7 +107,6 @@ async def test_serve_status_survives_bind_failure(caplog):
 
 
 async def test_serve_status_stops_cleanly_when_cancelled(capfd):
-    import asyncio
 
     task = asyncio.ensure_future(web.serve_status(make(), "127.0.0.1", 0))
     await asyncio.sleep(0.5)  # let uvicorn start
@@ -158,175 +119,6 @@ async def test_serve_status_stops_cleanly_when_cancelled(capfd):
     assert "Traceback" not in capfd.readouterr().err
 
 
-# --- pulse button ---------------------------------------------------------------------
-
-HDR = {"X-Gameday": "1"}
-
-
-class Recorder(DryRunBulb):
-    def __init__(self, name, fail=False, gate=None):
-        async def nosleep(s):
-            await asyncio.sleep(0)
-
-        super().__init__(name, sleep=nosleep)
-        self.fail, self.gate = fail, gate
-
-    async def set_color(self, color, brightness=255):
-        if self.gate:
-            await self.gate.wait()
-        if self.fail:
-            raise RuntimeError("bulb died")
-        await super().set_color(color, brightness)
-
-
-def make_pulse(bulb, clock=None):
-    from app.dispatch.dispatcher import Dispatcher, make_bulb_pulse, make_planner
-
-    store = Store()
-    config = cfg()
-    dispatcher = Dispatcher(store, {"lamp": bulb}, make_planner(config, {}, store))
-    kwargs = {"clock": clock} if clock else {}
-    app = create_app(store, config, WatcherStats(started_at=NOW), {"lamp": bulb}, False,
-                     now=lambda: NOW, dispatcher=dispatcher,
-                     pulse_pattern=make_bulb_pulse(config, {}), **kwargs)
-    return app, store
-
-
-async def test_pulse_requires_custom_header():
-    app, _ = make_pulse(Recorder("lamp"))
-    async with client(app) as c:
-        r = await c.post("/api/bulbs/lamp/pulse")
-        assert r.status_code == 403
-        # a cross-site form post: right method, wrong (simple) content type, no custom header
-        r = await c.post("/api/bulbs/lamp/pulse", data={"x": "1"})
-        assert r.status_code == 403
-
-
-async def test_pulse_unknown_bulb_404():
-    app, _ = make_pulse(Recorder("lamp"))
-    async with client(app) as c:
-        assert (await c.post("/api/bulbs/nope/pulse", headers=HDR)).status_code == 404
-
-
-async def test_pulse_plays_snapshot_flash_restore_and_writes_no_event():
-    bulb = Recorder("lamp")
-    app, store = make_pulse(bulb)
-    async with client(app) as c:
-        r = await c.post("/api/bulbs/lamp/pulse", headers=HDR)
-    body = r.json()
-    assert r.status_code == 200 and body["ok"] is True and body["duration_s"] == 6.0
-    kinds = [x[0] for x in bulb.calls]
-    assert kinds[0] == "snapshot" and kinds[-1] == "restore"
-    assert kinds.count("set_color") == 10  # the default 5-pulse pattern, via the dispatcher
-    assert store.recent_events(5) == []  # a pulse is not a game event
-
-
-async def test_pulse_cooldown_counts_from_the_end_of_the_last_pulse():
-    t = [100.0]
-    app, _ = make_pulse(Recorder("lamp"), clock=lambda: t[0])
-    async with client(app) as c:
-        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 200
-        t[0] = 105
-        r = await c.post("/api/bulbs/lamp/pulse", headers=HDR)
-        assert r.status_code == 429 and "wait 5s" in r.json()["detail"]
-        t[0] = 110.5
-        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 200
-
-
-async def test_pulse_while_pulsing_is_409():
-    gate = asyncio.Event()
-    app, _ = make_pulse(Recorder("lamp", gate=gate))
-    async with client(app) as c:
-        first = asyncio.ensure_future(c.post("/api/bulbs/lamp/pulse", headers=HDR))
-        await asyncio.sleep(0.05)  # first request is now inside the flash
-        second = await c.post("/api/bulbs/lamp/pulse", headers=HDR)
-        gate.set()
-        assert second.status_code == 409
-        assert (await first).status_code == 200
-
-
-async def test_pulse_failure_is_502_still_restores_and_starts_cooldown():
-    bulb = Recorder("lamp", fail=True)
-    app, _ = make_pulse(bulb)
-    async with client(app) as c:
-        r = await c.post("/api/bulbs/lamp/pulse", headers=HDR)
-        assert r.status_code == 502 and "bulb died" in r.json()["detail"]
-        assert bulb.calls[-1][0] == "restore"  # snapshot/restore even on failure
-        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 429
-
-
-def make_team_test(bulb, colors=None, clock=None):
-    from app.dispatch.dispatcher import (
-        Dispatcher,
-        make_bulb_pulse,
-        make_planner,
-        make_team_pulse,
-    )
-
-    store = Store()
-    config = cfg()
-    colors = colors or {}
-    dispatcher = Dispatcher(store, {"lamp": bulb}, make_planner(config, colors, store))
-    kwargs = {"clock": clock} if clock else {}
-    return create_app(store, config, WatcherStats(started_at=NOW), {"lamp": bulb}, False,
-                      now=lambda: NOW, dispatcher=dispatcher,
-                      pulse_pattern=make_bulb_pulse(config, colors),
-                      team_pulse=make_team_pulse(config, colors), **kwargs)
-
-
-TEAM_BODY = {"league": "nfl", "id": "9", "bulbs": ["lamp"],
-             "color": "#00ff00", "alt_color": "#ffb612"}
-
-
-async def test_team_test_plays_the_edited_colors_on_the_bulbs_and_restores():
-    bulb = Recorder("lamp")
-    async with client(make_team_test(bulb)) as c:
-        r = await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)
-    assert r.status_code == 200 and r.json()["bulbs"] == ["lamp"]
-    colors = [x[1] for x in bulb.calls if x[0] == "set_color"]
-    assert colors[0] == (0, 255, 0) and colors[1] == (255, 182, 18) and len(colors) == 10
-    assert bulb.calls[0][0] == "snapshot" and bulb.calls[-1][0] == "restore"
-
-
-async def test_team_test_falls_back_to_espn_colors_when_the_team_has_none():
-    bulb = Recorder("lamp")
-    body = {"league": "nfl", "id": "9", "bulbs": ["lamp"], "color": None, "alt_color": None,
-            "espn_color": "#112233", "espn_alt_color": "#445566"}
-    async with client(make_team_test(bulb)) as c:
-        assert (await c.post("/api/teams/test", headers=HDR, json=body)).status_code == 200
-    colors = [x[1] for x in bulb.calls if x[0] == "set_color"]
-    assert colors[:2] == [(0x11, 0x22, 0x33), (0x44, 0x55, 0x66)]
-
-
-async def test_team_test_guards_and_bad_input():
-    async with client(make_team_test(Recorder("lamp"))) as c:
-        assert (await c.post("/api/teams/test", json=TEAM_BODY)).status_code == 403
-        assert (await c.post("/api/teams/test", headers=HDR, json={})).status_code == 400
-        for bad in ({"bulbs": []}, {"color": "green"}, {"bulbs": [3]}):
-            r = await c.post("/api/teams/test", headers=HDR, json={**TEAM_BODY, **bad})
-            assert r.status_code == 400, bad
-        r = await c.post("/api/teams/test", headers=HDR, json={**TEAM_BODY, "bulbs": ["nope"]})
-        assert r.status_code == 404
-
-
-async def test_team_test_shares_the_pulse_cooldown():
-    t = [100.0]
-    async with client(make_team_test(Recorder("lamp"), clock=lambda: t[0])) as c:
-        assert (await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)).status_code == 200
-        t[0] = 103
-        assert (await c.post("/api/teams/test", headers=HDR, json=TEAM_BODY)).status_code == 429
-        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code == 429
-
-
-async def test_no_pulse_endpoint_without_a_dispatcher():
-    async with client(make()) as c:
-        assert (await c.post("/api/bulbs/lamp/pulse", headers=HDR)).status_code in (404, 405)
-
-
-async def test_page_has_pulse_button_wired_with_the_header():
-    async with client(make()) as c:
-        html = (await c.get("/")).text
-    assert "Pulse" in html and "X-Gameday" in html and "innerHTML" not in html
 
 
 async def test_schedule_row_without_team_data_falls_back_to_name():
@@ -347,8 +139,6 @@ async def test_page_is_read_once_at_startup_so_it_matches_the_running_api(tmp_pa
     async with client(app) as c:
         assert "version A" in (await c.get("/")).text
 
-
-# --- scoreboard card ------------------------------------------------------------------
 
 def live_game(state="in", detail="4:21 - 3rd", ended=None, gid="g1", us_home=False):
     side = lambda abbr, score: {  # noqa: E731
@@ -431,8 +221,6 @@ async def test_status_includes_scoreboard_block():
         s = (await c.get("/api/status")).json()
     assert s["scoreboard"]["mode"] in ("next", "idle") and "polling" in s["scoreboard"]
 
-
-# --- several followed teams -----------------------------------------------------------
 
 def multi_cfg():
     return Config(
@@ -518,12 +306,10 @@ def test_scoreboard_us_flag_is_per_league():
 
 async def test_page_has_team_filter_and_survives_blocked_storage():
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     assert "sched-filter" in html and "gl-sched-filter" in html and "teamcol" in html
     assert "try {" in html and "innerHTML" not in html
 
-
-# --- live apply -------------------------------------------------------------------------------
 
 async def test_page_follows_the_current_config_and_bulb_list_without_a_restart():
     from dataclasses import replace
@@ -546,27 +332,9 @@ async def test_page_follows_the_current_config_and_bulb_list_without_a_restart()
         assert all(b["ping_ms"] == 0 for b in s["bulbs"])  # the new bulb was pinged straight away
 
 
-async def test_pulse_endpoint_follows_a_bulb_added_after_startup():
-    from app.dispatch.dispatcher import Dispatcher, make_bulb_pulse, make_planner
-
-    store = Store()
-    config = cfg()
-    lamp = Recorder("lamp")
-    dispatcher = Dispatcher(store, {"lamp": lamp}, make_planner(config, {}, store))
-    app = create_app(store, config, WatcherStats(started_at=NOW), lambda: dispatcher.bulbs, False,
-                     now=lambda: NOW, dispatcher=dispatcher,
-                     pulse_pattern=make_bulb_pulse(config, {}))
-    async with client(app) as c:
-        assert (await c.post("/api/bulbs/den/pulse", headers=HDR)).status_code == 404
-        den = Recorder("den")
-        dispatcher.set_bulbs({"lamp": lamp, "den": den})
-        assert (await c.post("/api/bulbs/den/pulse", headers=HDR)).status_code == 200
-        assert den.calls and den.calls[0][0] == "snapshot"
-
-
 async def test_page_has_nav_and_the_teams_screen_wired_to_the_guarded_api():
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     for needle in ('id="tab-teams"', 'href="#/teams"', 'id="view-teams"', 'api/teams/search',
                    'api/settings/teams', '"If-Match"', '"X-Gameday"', "beforeunload",
                    "clearErrors", "Load latest", "api/teams/test", "testTeam"):
@@ -576,7 +344,7 @@ async def test_page_has_nav_and_the_teams_screen_wired_to_the_guarded_api():
 
 async def test_page_has_the_settings_screen_on_the_shared_section_editor():
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     for needle in ('id="tab-settings"', 'href="#/settings"', 'id="view-settings"', "const ROUTES",
                    "sectionEditor", 'section: "household"', "delay_s", "api/settings/${ed.section}",
                    '"If-Match"', '"X-Gameday"', "Load latest", "beforeunload"):
@@ -584,20 +352,9 @@ async def test_page_has_the_settings_screen_on_the_shared_section_editor():
     assert "innerHTML" not in html
 
 
-async def test_page_has_the_effects_screen_with_a_test_button_on_the_pulse_path():
-    async with client(make()) as c:
-        html = (await c.get("/")).text
-    for needle in ('id="tab-effects"', 'href="#/effects"', 'id="view-effects"',
-                   'section: "effects"', "effects.score.pulses", "FLASH_CAP", "Use team colors",
-                   "Save to test your changes", "pulse(testBulb)",
-                   "api/bulbs/${encodeURIComponent(name)}/pulse"):
-        assert needle in html, needle
-    assert "innerHTML" not in html
-
-
 async def test_page_has_the_advanced_screen_with_the_poll_floor_and_machine_note():
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     for needle in ('id="tab-advanced"', 'href="#/advanced"', 'id="view-advanced"',
                    'section: "advanced"', "ADV_DEFAULTS", "poll_live_s", "min: 10",
                    "Reset to defaults", "dispatch_enabled", 'href="#/advanced">Advanced timings'):
@@ -607,17 +364,17 @@ async def test_page_has_the_advanced_screen_with_the_poll_floor_and_machine_note
 
 async def test_page_has_the_bulbs_screen_with_write_only_keys_and_discovery():
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     for needle in ('id="tab-bulbs"', 'href="#/bulbs"', 'id="view-bulbs"', 'section: "bulbs"',
                    "api/bulbs/discover", "bulbPayload", 'type = "password"', "has_signing_key",
                    "Find bulbs on the network", "Add by IP", "Remove key",
-                   "/rename", "Teams using it"):
+                   "/rename", "Teams using it", "Update address", "A DHCP reservation",
+                   "Take it off those teams to remove it",
+                   "No lights: scores are recorded but nothing flashes", "no_lights"):
         assert needle in html, needle
     assert "innerHTML" not in html
     assert "config.toml for now" not in html
 
-
-# --- next game for every followed team -------------------------------------------------------
 
 def teams_cfg(*teams):
     """A config following (league, id, abbr) teams, all on one bulb."""
@@ -641,8 +398,14 @@ def next_games_for(cfg_, games, live=(), watching=(), now=NOW):
 
 
 PENS = ("nhl", "16", "PIT")
+
+
 PACK = ("nfl", "9", "GB")
+
+
 TONIGHT = NOW + timedelta(hours=5)
+
+
 SUNDAY = NOW + timedelta(days=1, hours=6)
 
 
@@ -719,82 +482,41 @@ async def test_page_script_has_no_duplicate_function_names():
     import collections
 
     async with client(make()) as c:
-        html = (await c.get("/")).text
+        html = await page_text(c)
     names = re.findall(r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", html, re.M)
     assert len(names) > 20  # the pattern really is finding the page's functions
     dupes = [n for n, count in collections.Counter(names).items() if count > 1]
     assert dupes == [], f"defined more than once: {dupes}"
 
 
-# --- Effects matrix (C50) --------------------------------------------------------------------
+def test_page_has_a_lights_screen_wired_to_the_state_api():
+    html = full_page()
+    assert 'href="#/lights"' in html and 'id="view-lights"' in html
+    assert '"#/lights"' in html and "/state" in html and "method: \"PUT\"" in html
 
 
-def strip_cfg():
-    from app.effects import EffectLayer
-
-    return Config(
-        GeneralConfig(True, "x.db", delay_s=45),
-        (BulbConfig("lamp", "10.0.0.5"),
-         BulbConfig("strip", "10.0.0.6", kind="govee", segments=20)),
-        (TeamConfig("nfl", "9", "GB", ("lamp", "strip"), color=(0, 255, 0),
-                    effect=EffectLayer(params={"duration_s": 4.0}),
-                    fixture_effects={"strip": EffectLayer(
-                        "chase", {"chunk": 5}, alt_color=(255, 140, 0))}),),
-        EffectConfig(),
-    )
+def test_page_saves_before_testing_and_keeps_the_save_bar_in_reach():
+    html = full_page()
+    assert "Save & test" in html and "saveThen(" in html
+    assert ".savebar.dirty { position: sticky" in html
+    assert "Save to test your changes" not in html
 
 
-def make_matrix(bulbs, config=None, dry_run=False):
-    from app.dispatch.dispatcher import (
-        Dispatcher,
-        make_bulb_pulse,
-        make_cell_pattern,
-        make_planner,
-    )
-
-    store = Store()
-    config = config or strip_cfg()
-    dispatcher = Dispatcher(store, bulbs, make_planner(config, {}, store))
-    return create_app(store, config, WatcherStats(started_at=NOW), bulbs, dry_run,
-                      now=lambda: NOW, dispatcher=dispatcher,
-                      pulse_pattern=make_bulb_pulse(config, {}),
-                      cell_pattern=make_cell_pattern(config, {}))
+def test_page_fills_in_segments_from_discovery_when_adding_a_strip():
+    html = full_page()
+    assert "segments: f.segments" in html and "Looking up the model" in html
 
 
-async def test_matrix_lists_each_team_bulb_with_kinds_and_where_settings_come_from():
-    app = make_matrix({"lamp": Recorder("lamp"), "strip": Recorder("strip")})
-    async with client(app) as c:
-        r = await c.get("/api/effects/matrix")
-    cells = {x["bulb"]: x for x in r.json()["cells"]}
-    lamp, strip = cells["lamp"], cells["strip"]
-    assert lamp["kinds"] == ["pulse"] and strip["kinds"] == ["chase", "pulse"]
-    assert (lamp["kind"], lamp["kind_from"]) == ("pulse", "default")
-    assert lamp["params"]["duration_s"] == {"value": 4.0, "from": "team"}
-    assert lamp["params"]["pulses"] == {"value": 5, "from": "default"}
-    assert (strip["kind"], strip["kind_from"]) == ("chase", "team x fixture")
-    assert strip["params"]["chunk"] == {"value": 5, "from": "team x fixture"}
-    assert strip["params"]["speed"] == {"value": 4.0, "from": "built-in"}
-    assert strip["color"] == {"value": "#00ff00", "from": "team"}
-    assert strip["alt_color"] == {"value": "#ff8c00", "from": "team x fixture"}
-    assert lamp["alt_color"] == {"value": None, "from": None}  # falls back to ESPN at play time
+async def test_page_is_a_thin_shell_and_its_assets_are_served():
+    async with client(make()) as c:
+        shell = (await c.get("/")).text
+        css = await c.get("/static/status.css")
+        js = await c.get("/static/app.js")
+        missing = await c.get("/static/nope.js")
+        traversal = await c.get("/static/..%2Fstatus.py")
+    assert 'href="static/status.css"' in shell and 'src="static/nav.js"' in shell
+    assert "<script>" not in shell and "<style>" not in shell
+    assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
+    assert js.status_code == 200 and js.headers["content-type"].startswith("text/javascript")
+    assert missing.status_code == 404 and traversal.status_code == 404
 
-
-async def test_matrix_test_plays_the_same_pattern_an_event_would_and_restores():
-    strip = Recorder("strip")
-    app = make_matrix({"lamp": Recorder("lamp"), "strip": strip})
-    async with client(app) as c:
-        r = await c.post("/api/effects/test", headers=HDR,
-                         json={"league": "nfl", "id": "9", "bulb": "strip"})
-    assert r.status_code == 200
-    assert [x[0] for x in strip.calls] == ["snapshot", "play_segments", "restore"]
-    assert strip.calls[1][2] == 20  # segments
-
-
-async def test_matrix_test_needs_header_and_rejects_unknown_team_bulb_pairs():
-    app = make_matrix({"lamp": Recorder("lamp"), "strip": Recorder("strip")})
-    body = {"league": "nfl", "id": "9", "bulb": "strip"}
-    async with client(app) as c:
-        assert (await c.post("/api/effects/test", json=body)).status_code == 403
-        assert (await c.post("/api/effects/test", headers=HDR, json={})).status_code == 400
-        other = {"league": "nfl", "id": "1", "bulb": "strip"}
-        assert (await c.post("/api/effects/test", headers=HDR, json=other)).status_code == 404

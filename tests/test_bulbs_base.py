@@ -156,3 +156,40 @@ async def test_adapter_without_segments_refuses_segment_patterns():
 
     with pytest.raises(PatternError):
         await Plain("x").play(SegmentPattern(_frames([G])))
+
+
+def test_bulb_state_validates_and_merges():
+    from app.bulbs.base import BulbState
+
+    with pytest.raises(ValueError):
+        BulbState(color=(1, 2, 3), color_temp_k=3000)
+    with pytest.raises(ValueError):
+        BulbState(brightness=0)
+    with pytest.raises(ValueError):
+        BulbState(color=(256, 0, 0))
+    base = BulbState(on=True, color=(1, 2, 3), brightness=100)
+    assert base.merged(BulbState(brightness=50)) == BulbState(True, (1, 2, 3), None, 50)
+    white = base.merged(BulbState(color_temp_k=2700))
+    assert white.color is None and white.color_temp_k == 2700
+    assert white.merged(BulbState(color=(9, 9, 9))).color_temp_k is None
+
+
+async def test_dry_run_set_state_tracks_the_current_state():
+    from app.bulbs.base import BulbState
+
+    bulb = DryRunBulb("lamp")
+    await bulb.set_state(BulbState(color=(1, 2, 3), brightness=40))
+    assert await bulb.current_state() == BulbState(True, (1, 2, 3), None, 40)
+    assert bulb.calls[0][0] == "set_state"
+
+
+async def test_adapter_without_state_support_says_so():
+    from app.bulbs.base import BulbAdapter, BulbState
+
+    class Plain(BulbAdapter):
+        async def set_color(self, color, brightness=255): ...
+        async def snapshot(self): ...
+        async def restore(self, snapshot): ...
+
+    with pytest.raises(NotImplementedError):
+        await Plain("x").set_state(BulbState(on=True))

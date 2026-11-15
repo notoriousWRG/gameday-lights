@@ -8,37 +8,32 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import sys
 import time
-from functools import reduce
 
-from app.bulbs.base import MAX_CHANGES_PER_S, Color
-from app.bulbs.govee import COMMAND_PORT, GoveeBulb, GoveeTransport, UdpTransport
+from app.bulbs.base import MAX_CHANGES_PER_S, BulbState, Color
+from app.bulbs.govee import (
+    COMMAND_PORT,
+    RAZER_ENABLE,
+    RAZER_LED_DATA,
+    GoveeBulb,
+    GoveeTransport,
+    UdpTransport,
+    razer_message,
+    razer_packet,
+)
 from app.bulbs.wiz import BulbUnreachable
+from app.effects import chase_frame
 
 GREEN: Color = (0, 255, 0)
 GOLD: Color = (255, 140, 0)  # less green than (255,182,18), which reads washed out on this strip
-ENABLE, LED_DATA = 0xB1, 0xB0
+ENABLE, LED_DATA = RAZER_ENABLE, RAZER_LED_DATA
 FRAME_HZ = 10.0
-
-
-def build_packet(command: int, data: list[int]) -> bytes:
-    body = bytes([0xBB, 0x00, len(data), command, *data])
-    return body + bytes([reduce(lambda a, b: a ^ b, body)])
-
-
-def razer_message(packet: bytes) -> dict:
-    return {"msg": {"cmd": "razer", "data": {"pt": base64.b64encode(packet).decode()}}}
+build_packet = razer_packet  # the protocol lives in app/bulbs/govee.py; kept under the old name
 
 
 def led_frame(colors: list[Color]) -> bytes:
-    return build_packet(LED_DATA, [0, len(colors), *(c for rgb in colors for c in rgb)])
-
-
-def chase_frame(n: int, offset: int, chunk: int, colors: tuple[Color, Color]) -> list[Color]:
-    """n segments: chunks of `chunk` alternating the two colors, shifted by `offset` (wraps)."""
-    return [colors[((i - offset) // chunk) % 2] for i in range(n)]
+    return razer_packet(LED_DATA, [0, len(colors), *(c for rgb in colors for c in rgb)])
 
 
 def check_speed(speed: float, chunk: int) -> None:
@@ -74,6 +69,11 @@ async def probe(args: argparse.Namespace, transport: GoveeTransport | None = Non
         print(f"{args.ip} did not answer: {e}", file=sys.stderr)
         return 1
     print(f"Snapshot: {snap}")
+    brightness = getattr(args, "brightness", None)
+    if brightness is not None:
+        await bulb.set_state(BulbState(on=True, brightness=max(1, round(brightness * 255 / 100))))
+        print(f"Device brightness set to {brightness}% before streaming. Does the chase look "
+              f"{brightness}% as bright as the strip's normal color at {brightness}%?")
     print(f"Chase: {args.segments} segments, chunks of {args.chunk}, {args.speed:g}/s, "
           f"{args.seconds:g} s. Watch the strip.")
     try:
@@ -99,6 +99,9 @@ def main() -> None:
     p.add_argument("--chunk", type=int, default=3, help="segments per color chunk")
     p.add_argument("--speed", type=float, default=3.0, help="segments per second")
     p.add_argument("--seconds", type=float, default=8.0)
+    p.add_argument("--brightness", type=int, choices=range(1, 101), metavar="1-100",
+                   help="set the strip's device brightness (percent) before streaming, to see "
+                        "whether streaming honors it")
     args = p.parse_args()
     try:
         sys.exit(asyncio.run(probe(args)))

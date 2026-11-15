@@ -310,3 +310,48 @@ def test_bulb_pulse_uses_the_same_resolution_as_an_event():
     pulse = make_bulb_pulse(cfg, {})
     assert isinstance(pulse("strip"), SegmentPattern)
     assert isinstance(pulse("lamp"), Pattern)
+
+
+async def test_set_state_waits_for_an_effect_and_lands_after_its_restore():
+    from app.bulbs.base import BulbState
+
+    store, clock, log, d = setup(bulbs=("a",))
+
+    class Stateful(Recorder):
+        async def set_state(self, state):
+            self.log.append((self.name, "state", state.brightness))
+
+        async def current_state(self):
+            return BulbState(on=True, brightness=7)
+
+    bulb = Stateful("a", log)
+    d.set_bulbs({"a": bulb})
+    effect = asyncio.create_task(d.play_now("a", PATTERN))
+    await asyncio.sleep(0)
+    await d.set_state("a", BulbState(brightness=40))
+    await effect
+    kinds = [x[1] for x in log]
+    assert kinds.index("restore") < kinds.index("state")  # the manual change is what stays
+    assert (await d.current_state("a")).brightness == 7
+
+
+async def test_set_state_unknown_bulb_and_no_event_written():
+    from app.bulbs.base import BulbState
+
+    store, clock, log, d = setup(bulbs=("a",))
+    with pytest.raises(KeyError):
+        await d.set_state("zzz", BulbState(on=True))
+    with pytest.raises(KeyError):
+        await d.current_state("zzz")
+
+
+async def test_team_with_no_lights_is_recorded_as_no_lights_not_failed():
+    store, clock, log, d = setup()
+    d._planner = lambda e: []
+    e = event()
+    store.insert_event(e)
+    d.schedule(e)
+    await d.wait_idle()
+    got = store.get_event(e.dedupe_key)
+    assert got.status == "no_lights" and got.fired_at is None
+    assert log == []

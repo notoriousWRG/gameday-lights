@@ -63,7 +63,8 @@ final_hold_min = 5
 def test_machine_part_is_only_the_machine_settings():
     cfg, machine, sections = example()
     assert set(machine["general"]) == {"dispatch_enabled", "db_path"}
-    assert set(machine["web"]) == {"enabled", "host", "port"}
+    assert set(machine["web"]) == {"enabled", "host", "port", "practice_minutes",
+                                      "mark_window_min"}
     assert set(sections) == set(settings.SECTIONS)
     assert "dispatch_enabled" not in str(sections) and "db_path" not in str(sections)
 
@@ -232,3 +233,25 @@ def test_unset_layers_are_left_out_of_sections():
 def test_shape_check_covers_layers(section, value, needle):
     with pytest.raises(ConfigError, match=needle):
         settings.check_section_shape(section, value)
+
+
+def test_delay_by_label_round_trips_through_the_household_section(tmp_path):
+    text = LAYERED.replace("dispatch_enabled = false\n",
+                           "dispatch_enabled = false\n[general.delay_by_label]\nPAT = 3.5\n")
+    p = tmp_path / "config.toml"
+    p.write_text(text)
+    cfg = load_config(p)
+    _, machine, sections = (cfg, settings.machine_raw_from_config(cfg),
+                            settings.sections_from_config(cfg))
+    assert sections["household"] == {"delay_s": 45.0, "delay_by_label": {"PAT": 3.5}}
+    assert settings.build_config(machine, sections, tmp_path) == cfg
+    plain = settings.sections_from_config(load_config(EXAMPLE))
+    assert "delay_by_label" not in plain["household"]  # unset stays out, as before
+
+
+def test_household_shape_and_error_location_cover_delay_by_label():
+    with pytest.raises(ConfigError, match="delay_by_label"):
+        settings.check_section_shape("household", {"delay_s": 5, "delay_by_label": [1]})
+    settings.check_section_shape("household", {"delay_s": 5, "delay_by_label": {"PAT": 3}})
+    assert settings.error_location("general.delay_by_label.PAT") == ("household",
+                                                                     "delay_by_label.PAT")

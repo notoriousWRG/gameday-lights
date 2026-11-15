@@ -66,6 +66,20 @@ def test_unknown_team_bulb(tmp_path):
         load_config(write(tmp_path, BASE.replace('bulbs = ["a"]', 'bulbs = ["zz"]')))
 
 
+def test_team_may_have_no_bulbs(tmp_path):
+    cfg = load_config(write(tmp_path, BASE.replace('bulbs = ["a"]', "bulbs = []")))
+    assert cfg.teams[0].bulbs == ()
+    cfg = load_config(write(tmp_path, BASE.replace('bulbs = ["a"]\n', "")))
+    assert cfg.teams[0].bulbs == ()
+
+
+def test_team_bulb_list_must_be_a_list_without_repeats(tmp_path):
+    with pytest.raises(ConfigError, match="list of bulb names"):
+        load_config(write(tmp_path, BASE.replace('bulbs = ["a"]', 'bulbs = "a"')))
+    with pytest.raises(ConfigError, match="listed twice"):
+        load_config(write(tmp_path, BASE.replace('bulbs = ["a"]', 'bulbs = ["a", "a"]')))
+
+
 def test_duplicates(tmp_path):
     with pytest.raises(ConfigError, match="duplicate bulb"):
         load_config(write(tmp_path, BASE + '[[bulbs]]\nname = "a"\nip = "5.6.7.8"\n'))
@@ -224,3 +238,41 @@ def test_config_without_layers_is_unchanged(tmp_path):
     cfg = load_config(write(tmp_path, BASE))
     assert cfg.fixture_effects == {}
     assert cfg.teams[0].effect is None and cfg.teams[0].fixture_effects == {}
+
+
+def test_delay_by_label_parses_and_defaults_to_empty(tmp_path):
+    assert load_config(write(tmp_path, BASE)).general.delay_by_label == {}
+    text = BASE.replace("dispatch_enabled = false\n",
+                        'dispatch_enabled = false\n[general.delay_by_label]\nPAT = 3.5\nFG = 6\n')
+    assert load_config(write(tmp_path, text)).general.delay_by_label == {"PAT": 3.5, "FG": 6.0}
+
+
+@pytest.mark.parametrize("entry, needle", [
+    ('PAT = -1', "delay_by_label.PAT: must be between 0 and 180"),
+    ('PAT = 500', "delay_by_label.PAT: must be between 0 and 180"),
+    ('PAT = "fast"', "delay_by_label.PAT: must be a number"),
+    ('"" = 3', "names must be 1-16 characters"),
+])
+def test_bad_delay_by_label_is_refused_naming_the_field(tmp_path, entry, needle):
+    text = BASE.replace("dispatch_enabled = false\n",
+                        f"dispatch_enabled = false\n[general.delay_by_label]\n{entry}\n")
+    with pytest.raises(ConfigError, match=needle):
+        load_config(write(tmp_path, text))
+
+
+def test_practice_minutes_default_and_limits(tmp_path):
+    assert load_config(write(tmp_path, BASE)).web.practice_minutes == 20
+    web = lambda v: BASE + f"[web]\npractice_minutes = {v}\n"  # noqa: E731
+    assert load_config(write(tmp_path, web(45))).web.practice_minutes == 45
+    for bad in (0, 121):
+        with pytest.raises(ConfigError, match="practice_minutes"):
+            load_config(write(tmp_path, web(bad)))
+
+
+def test_mark_window_default_and_limits(tmp_path):
+    assert load_config(write(tmp_path, BASE)).web.mark_window_min == 5
+    web = lambda v: BASE + f"[web]\nmark_window_min = {v}\n"  # noqa: E731
+    assert load_config(write(tmp_path, web(10))).web.mark_window_min == 10
+    for bad in (0, 61):
+        with pytest.raises(ConfigError, match="mark_window_min"):
+            load_config(write(tmp_path, web(bad)))

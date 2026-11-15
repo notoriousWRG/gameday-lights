@@ -68,6 +68,17 @@ def _record(competitor: dict) -> str | None:
     return None
 
 
+def _last_play(raw) -> dict | None:
+    """The latest play's ESPN id and text. None when absent or malformed."""
+    if not isinstance(raw, dict):
+        return None
+    play_id, text = raw.get("id"), raw.get("text")
+    if play_id is None and not text:
+        return None
+    return {"id": None if play_id is None else str(play_id),
+            "text": text if isinstance(text, str) else None}
+
+
 def _situation(comp: dict, abbr_by_id: dict[str, str]) -> dict | None:
     """Down/distance and possession for a live game. Read defensively: ESPN only sends it live."""
     sit = comp.get("situation")
@@ -76,9 +87,11 @@ def _situation(comp: dict, abbr_by_id: dict[str, str]) -> dict | None:
     text = sit.get("downDistanceText") or sit.get("shortDownDistanceText")
     possession = sit.get("possession")
     poss_abbr = abbr_by_id.get(str(possession)) if possession is not None else None
-    if not (text or poss_abbr or sit.get("possessionText")):
+    last_play = _last_play(sit.get("lastPlay"))
+    if not (text or poss_abbr or sit.get("possessionText") or last_play):
         return None
     return {
+        "last_play": last_play,
         "text": text,
         "possession": poss_abbr,
         "possession_text": sit.get("possessionText"),

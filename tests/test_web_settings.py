@@ -350,10 +350,20 @@ async def test_discover_marks_known_bulbs_and_needs_the_header():
         body = (await c.post("/api/bulbs/discover", headers=H)).json()
     assert body == [
         {"ip": "10.0.0.9", "mac": "cc4085e692f4", "kind": "wiz", "known": True,
-         "name": cfg.bulbs[0].name},
-        {"ip": "10.0.0.50", "mac": "aabbccddeeff", "kind": "wiz", "known": False, "name": None},
+         "name": cfg.bulbs[0].name, "stored_ip": cfg.bulbs[0].ip, "moved": True},
+        {"ip": "10.0.0.50", "mac": "aabbccddeeff", "kind": "wiz", "known": False, "name": None,
+         "stored_ip": None, "moved": False},
     ]
     assert "signing" not in str(body)
+
+
+async def test_discover_says_a_known_bulb_at_its_stored_ip_has_not_moved():
+    _, cfg = make_discovering([])
+    stored = cfg.bulbs[0]
+    app, _ = make_discovering([{"ip": stored.ip, "mac": stored.mac}])
+    async with client(app) as c:
+        (row,) = (await c.post("/api/bulbs/discover", headers=H)).json()
+    assert row["known"] is True and row["moved"] is False and row["stored_ip"] == stored.ip
 
 
 async def test_discover_passes_the_kind_through():
@@ -361,7 +371,7 @@ async def test_discover_passes_the_kind_through():
     async with client(app) as c:
         body = (await c.post("/api/bulbs/discover", headers=H)).json()
     assert body == [{"ip": "10.0.0.60", "mac": "0da8de99c4c6475f", "kind": "govee",
-                     "known": False, "name": None}]
+                     "known": False, "name": None, "stored_ip": None, "moved": False}]
 
 
 async def test_discover_failure_is_502_and_concurrent_search_is_409():
@@ -476,7 +486,7 @@ async def test_segments_default_to_one_when_a_bulbs_save_leaves_them_out():
 
 
 async def test_page_sends_segments_with_every_bulbs_save():
-    from app.web.status import PAGE
+    from tests.support import full_page
 
-    html = PAGE.read_text(encoding="utf-8")
+    html = full_page()
     assert "segments:" in html and '"Segments"' in html

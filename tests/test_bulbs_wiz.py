@@ -140,3 +140,34 @@ async def test_discover_wiz_turns_network_errors_into_bulb_unreachable():
         raise OSError("network is unreachable")
     with pytest.raises(BulbUnreachable, match="network is unreachable"):
         await discover_wiz(discover=boom)
+
+
+async def test_set_state_sends_color_white_brightness_and_off():
+    from app.bulbs.base import BulbState
+
+    bulb, lights = make(dead=())
+    await bulb.set_state(BulbState(color=(0, 255, 0), brightness=100))
+    await bulb.set_state(BulbState(color_temp_k=2700))
+    await bulb.set_state(BulbState(on=False))
+    sent = lights[0].sent
+    assert sent[0][0] == "on" and sent[0][1]["g"] == 255 and sent[0][1]["dimming"] == 39
+    assert sent[1][1]["temp"] == 2700
+    assert sent[2] == ("off",)
+
+
+async def test_set_state_with_nothing_to_change_sends_nothing():
+    from app.bulbs.base import BulbState
+
+    bulb, lights = make(dead=())
+    await bulb.set_state(BulbState())
+    assert lights[0].sent == []
+
+
+async def test_current_state_reads_color_or_white():
+    bulb, lights = make(dead=())
+    lights[0].st = state(rgb=(10, 20, 30), bri=128, temp=None)
+    got = await bulb.current_state()
+    assert (got.on, got.color, got.color_temp_k, got.brightness) == (True, (10, 20, 30), None, 128)
+    lights[0].st = state(rgb=(None, None, None), bri=64, temp=2700)
+    got = await bulb.current_state()
+    assert got.color is None and got.color_temp_k == 2700

@@ -272,3 +272,46 @@ def test_renaming_a_bulb_renames_its_effect_layers_too(tmp_path):
     assert "porch" in cfg.fixture_effects
     assert "strip" not in cfg.teams[0].fixture_effects and "strip" not in cfg.fixture_effects
     assert cfg.teams[0].fixture_effects["porch"].kind == "chase"
+
+
+def test_export_keeps_delay_by_label_and_reads_back_equal(tmp_path):
+    text = LAYERED.replace("dispatch_enabled = false\n",
+                           "dispatch_enabled = false\n[general.delay_by_label]\nPAT = 3.5\n")
+    p = tmp_path / "config.toml"
+    p.write_text(text)
+    cfg = load_config(p)
+    svc = SettingsService(Store(), settings.machine_raw_from_config(cfg), tmp_path,
+                          now=lambda: NOW)
+    svc.seed(cfg)
+    svc.load()
+    assert svc.config.general.delay_by_label == {"PAT": 3.5}
+    out = tmp_path / "exported.toml"
+    out.write_text(config_to_toml(svc.config), encoding="utf-8")
+    assert load_config(out) == cfg
+
+
+def test_taking_a_bulb_off_a_team_drops_that_teams_settings_for_it(tmp_path):
+    svc, _, _ = layered(tmp_path)
+    teams = edited(svc, "teams", lambda v: v[0].update(bulbs=[]))
+    assert "fixture_effects" in teams[0]  # the UI sends the stale override back
+    _, cfg = svc.update("teams", teams, svc.sections()["teams"][0])
+    assert cfg.teams[0].bulbs == () and cfg.teams[0].fixture_effects == {}
+    assert "fixture_effects" not in svc.sections()["teams"][1][0]
+
+
+def test_removing_a_bulb_drops_its_global_effect_settings_and_the_team_may_be_empty(tmp_path):
+    svc, _, _ = layered(tmp_path)
+    rev = lambda s: svc.sections()[s][0]  # noqa: E731
+    svc.update("teams", edited(svc, "teams", lambda v: v[0].update(bulbs=[])), rev("teams"))
+    _, cfg = svc.update("bulbs", [], rev("bulbs"))
+    assert cfg.bulbs == () and cfg.fixture_effects == {}
+    assert cfg.teams[0].bulbs == ()
+    assert "fixtures" not in svc.sections()["effects"][1]
+    assert rev("effects") == 2
+
+
+def test_a_bulb_listed_twice_on_a_team_is_refused(tmp_path):
+    svc, _, _ = layered(tmp_path)
+    with pytest.raises(ConfigError, match="listed twice"):
+        svc.update("teams", edited(svc, "teams", lambda v: v[0].update(bulbs=["strip", "strip"])),
+                   svc.sections()["teams"][0])

@@ -142,3 +142,12 @@ def test_fields_fall_through_and_other_fixtures_are_unaffected():
     assert strip.spec.kind == "chase"
     assert strip.spec.params == {"duration_s": 6.0, "brightness": 255}  # pulses dropped
     assert strip.alternate == BLUE  # ESPN fallback for colors only
+
+
+def test_to_hex_round_trips_with_parse_color_and_keeps_none():
+    from app.effects import DEFAULT_COLORS, to_hex
+
+    assert to_hex(None) is None
+    assert to_hex((0, 255, 0)) == "#00ff00"
+    assert parse_color(to_hex((18, 52, 86))) == (18, 52, 86)
+    assert [to_hex(c) for c in DEFAULT_COLORS] == ["#00ff00", "#ffffff"]

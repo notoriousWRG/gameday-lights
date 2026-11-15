@@ -5,7 +5,7 @@ Machine config stays in config.toml only: db_path, dispatch_enabled and the [web
 Everything else is household state, stored as sections:
 
     bulbs, teams, effects  - the same shapes as their TOML tables
-    household              - delay_s
+    household              - delay_s, delay_by_label (a different delay per kind of score)
     advanced               - poll/sync/lead timings, pulse_cooldown_s, final_hold_min
 
 Validation is config.parse_config, so the file and the UI follow one set of rules.
@@ -17,14 +17,14 @@ import copy
 from pathlib import Path
 
 from app.config import Config, ConfigError, parse_config
-from app.effects import KIND_PARAMS
+from app.effects import KIND_PARAMS, to_hex
 
 SECTIONS = ("bulbs", "teams", "effects", "household", "advanced")
 
 _ADVANCED_GENERAL = ("schedule_sync_hours", "watch_lead_min", "poll_live_s", "poll_break_s")
 _ADVANCED_WEB = ("pulse_cooldown_s", "final_hold_min")
 _ALLOWED = {
-    "household": {"delay_s"},
+    "household": {"delay_s", "delay_by_label"},
     "advanced": {*_ADVANCED_GENERAL, *_ADVANCED_WEB},
 }
 _BULB_KEYS = {"name", "ip", "mac", "port", "signing_key", "kind", "segments"}
@@ -34,16 +34,14 @@ _EFFECT_KEYS = {"pulses", "duration_s", "color", "alt_color", "brightness"}
 SECRET = "signing_key"
 
 
-def _hex(color) -> str | None:
-    return "#{:02x}{:02x}{:02x}".format(*color) if color else None
-
-
 def machine_raw_from_config(cfg: Config) -> dict:
     """The machine-level (TOML only) part of a config, in TOML shape."""
     return {
         "general": {"dispatch_enabled": cfg.general.dispatch_enabled,
                     "db_path": str(cfg.general.db_path)},
-        "web": {"enabled": cfg.web.enabled, "host": cfg.web.host, "port": cfg.web.port},
+        "web": {"enabled": cfg.web.enabled, "host": cfg.web.host, "port": cfg.web.port,
+                "practice_minutes": cfg.web.practice_minutes,
+                "mark_window_min": cfg.web.mark_window_min},
     }
 
 
@@ -55,7 +53,7 @@ def _layer_dict(layer, colors: bool = True) -> dict:
     if colors:
         for key, color in (("color", layer.color), ("alt_color", layer.alt_color)):
             if color:
-                out[key] = _hex(color)
+                out[key] = to_hex(color)
     return out
 
 
@@ -85,14 +83,15 @@ def _base_sections(cfg: Config, g, w, e) -> dict[str, object]:
         ],
         "teams": [
             {"league": t.league, "id": t.id, "abbr": t.abbr, "bulbs": list(t.bulbs),
-             "color": _hex(t.color), "alt_color": _hex(t.alt_color)}
+             "color": to_hex(t.color), "alt_color": to_hex(t.alt_color)}
             for t in cfg.teams
         ],
         "effects": {"score": {
-            "pulses": e.pulses, "duration_s": e.duration_s, "color": _hex(e.color),
-            "alt_color": _hex(e.alt_color), "brightness": e.brightness,
+            "pulses": e.pulses, "duration_s": e.duration_s, "color": to_hex(e.color),
+            "alt_color": to_hex(e.alt_color), "brightness": e.brightness,
         }},
-        "household": {"delay_s": g.delay_s},
+        "household": {"delay_s": g.delay_s,
+                      **({"delay_by_label": dict(g.delay_by_label)} if g.delay_by_label else {})},
         "advanced": {
             "schedule_sync_hours": g.schedule_sync_hours, "watch_lead_min": g.watch_lead_min,
             "poll_live_s": g.poll_live_s, "poll_break_s": g.poll_break_s,
@@ -151,6 +150,8 @@ def check_section_shape(section: str, value: object) -> None:
         _unknown("effects.score", score, _EFFECT_KEYS)
     else:
         _unknown(section, value, _ALLOWED[section])
+        if section == "household" and not isinstance(value.get("delay_by_label", {}), dict):
+            raise ConfigError("household.delay_by_label: must be an object")
 
 
 def merge_raw(machine_raw: dict, sections: dict[str, object]) -> dict:
@@ -166,6 +167,8 @@ def merge_raw(machine_raw: dict, sections: dict[str, object]) -> dict:
     advanced = sections.get("advanced", {})
     if "delay_s" in household:
         raw["general"]["delay_s"] = household["delay_s"]
+    if "delay_by_label" in household:
+        raw["general"]["delay_by_label"] = household["delay_by_label"]
     for key in _ADVANCED_GENERAL:
         if key in advanced:
             raw["general"][key] = advanced[key]
@@ -193,7 +196,7 @@ def error_location(path: str) -> tuple[str, str]:
         return head, path
     if "." in path:
         table, field = path.split(".", 1)
-        if table == "general" and field == "delay_s":
+        if table == "general" and (field == "delay_s" or field.startswith("delay_by_label")):
             return "household", field
         if (table == "general" and field in _ADVANCED_GENERAL) or (
             table == "web" and field in _ADVANCED_WEB
