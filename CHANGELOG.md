@@ -3,6 +3,11 @@
 One section per release, newest first. The section for a version is its GitHub Release notes,
 so write it for the person updating: what changed for them, and anything they must do.
 
+## 0.1.0rc1 (2026-11-15)
+
+Release candidate for 0.1.0, to try the installer on a first computer before anyone else gets
+it. Same contents as 0.1.0 below.
+
 ## 0.1.0 (unreleased)
 
 First packaged release.
