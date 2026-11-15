@@ -14,6 +14,7 @@ Validation is config.parse_config, so the file and the UI follow one set of rule
 from __future__ import annotations
 
 import copy
+import dataclasses
 from pathlib import Path
 
 from app.config import Config, ConfigError, parse_config
@@ -42,6 +43,7 @@ def machine_raw_from_config(cfg: Config) -> dict:
         "web": {"enabled": cfg.web.enabled, "host": cfg.web.host, "port": cfg.web.port,
                 "practice_minutes": cfg.web.practice_minutes,
                 "mark_window_min": cfg.web.mark_window_min},
+        "health": {k: v for k, v in dataclasses.asdict(cfg.health).items() if v is not None},
     }
 
 
@@ -159,6 +161,7 @@ def merge_raw(machine_raw: dict, sections: dict[str, object]) -> dict:
     raw = {
         "general": dict(machine_raw.get("general", {})),
         "web": dict(machine_raw.get("web", {})),
+        "health": dict(machine_raw.get("health", {})),
         "bulbs": copy.deepcopy(sections.get("bulbs", [])),
         "teams": copy.deepcopy(sections.get("teams", [])),
         "effects": copy.deepcopy(sections.get("effects", {})),

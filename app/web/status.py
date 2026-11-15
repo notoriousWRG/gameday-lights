@@ -34,6 +34,7 @@ from app.web.data import (  # noqa: F401  (re-exported: other modules and tests 
 )
 from app.web.routes_bulbs import add_bulb_routes, add_discover_route
 from app.web.routes_calibration import add_calibration_routes
+from app.web.routes_diagnostics import add_diagnostics_routes
 from app.web.routes_effects import add_matrix_route, add_test_routes
 from app.web.routes_settings import add_settings_routes
 from app.web.routes_teams import add_team_routes
@@ -93,6 +94,7 @@ def create_app(
     team_test: Callable[..., Pattern | SegmentPattern] | None = None,
     cell_pattern: Callable[[str, str, str], Pattern | SegmentPattern] | None = None,
     practice=None,
+    config_path: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Gameday Lights status", docs_url=None, redoc_url=None, openapi_url=None)
     pings = BulbPings(bulbs)
@@ -113,6 +115,7 @@ def create_app(
     async def status() -> dict:
         return build_status(store, resolve(cfg), stats, await pings.get(), dry_run, now())
 
+    add_diagnostics_routes(app, store, cfg, stats, pings.get, dry_run, now, practice, config_path)
     add_matrix_route(app, cfg)
     add_calibration_routes(app, store, cfg, now, practice)
     if dispatcher is not None and pulse_pattern is not None:

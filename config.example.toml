@@ -46,3 +46,23 @@ pulse_cooldown_s = 10   # minimum seconds between Pulse-button presses on one bu
 final_hold_min = 30     # how long a finished game stays on the Scoreboard card (0 = drop at once)
 practice_minutes = 20   # how long Calibrate's practice mode stays on once started (1 to 120)
 mark_window_min = 5     # how long after a score or play the "I see it on TV" button stays (1 to 60)
+
+[health]
+# Optional. A monitoring URL (healthchecks.io style) that is pinged on a schedule; the monitor
+# alerts its owner when pings stop. Leave heartbeat_url out to never call anywhere.
+# heartbeat_url = "https://hc-ping.com/your-uuid"
+heartbeat_interval_s = 300   # minimum 60
+
+# Failure messages: when ESPN or a bulb has been failing for fail_after_min, one message is sent
+# (repeated at most every renotify_min), and one more when it clears. Off by default.
+# name = "The Smiths"                  # shown in the message subject
+# notify = "webhook"                   # "none" (just log), "webhook" or "smtp"
+# webhook_url = "https://ntfy.example/topic"   # receives JSON {subject, body, text}
+# smtp_host = "smtp.example.com"
+# smtp_port = 587                      # 465 uses SSL; anything else uses STARTTLS
+# smtp_user = "me@example.com"
+# smtp_password = "app password"
+# smtp_from = "me@example.com"
+# smtp_to = "me@example.com"
+# fail_after_min = 5
+# renotify_min = 120

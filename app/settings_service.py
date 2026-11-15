@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from app.config import Config, ConfigError
+from app.config import HEALTH_SECRETS, Config, ConfigError
 from app.dispatch.dispatcher import utc_now
 from app.settings import (
     SECRET,
@@ -313,6 +313,11 @@ def config_to_toml(cfg: Config, include_secrets: bool = True) -> str:
     for bulb, layer in sections["effects"].get("fixtures", {}).items():
         out += _table(f"[effects.fixtures.{_key(bulb)}]", layer)
     out += _table("[web]", web)
+    health = dict(machine["health"])
+    if not include_secrets:  # URLs usually carry a private token
+        for key in HEALTH_SECRETS:
+            health.pop(key, None)
+    out += _table("[health]", health)
     return "\n".join(out)
 
 

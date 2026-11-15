@@ -520,3 +520,9 @@ async def test_page_is_a_thin_shell_and_its_assets_are_served():
     assert js.status_code == 200 and js.headers["content-type"].startswith("text/javascript")
     assert missing.status_code == 404 and traversal.status_code == 404
 
+
+async def test_diagnostics_screen_is_wired_into_the_page():
+    async with client(make()) as c:
+        text = await page_text(c)
+    assert 'id="tab-diagnostics"' in text and "api/diagnostics" in text
+    assert "diagLoad" in text and "innerHTML" not in text

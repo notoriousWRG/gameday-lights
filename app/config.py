@@ -78,6 +78,29 @@ class WebConfig:
     mark_window_min: float = 5.0  # a score or play can be marked "seen on TV" this long after it
 
 
+MIN_HEARTBEAT_S = 60.0
+NOTIFY_KINDS = ("none", "webhook", "smtp")
+HEALTH_SECRETS = ("heartbeat_url", "webhook_url", "smtp_password")  # left out of a shared export
+
+
+@dataclass(frozen=True)
+class HealthConfig:
+    """Machine settings for health alerts (TOML only: they hold secrets and are the owner's)."""
+    heartbeat_url: str | None = None  # None = never call out
+    heartbeat_interval_s: float = 300.0
+    name: str = "Gameday Lights"  # which install an alert is about
+    notify: str = "none"  # "none" (log only), "webhook" or "smtp"
+    webhook_url: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_to: str | None = None
+    fail_after_min: float = 5.0  # a problem must last this long before a message is sent
+    renotify_min: float = 120.0  # an ongoing problem is repeated at most this often
+
+
 @dataclass(frozen=True)
 class Config:
     general: GeneralConfig
@@ -86,6 +109,7 @@ class Config:
     score_effect: EffectConfig = field(default_factory=EffectConfig)
     web: WebConfig = field(default_factory=WebConfig)
     fixture_effects: Mapping[str, EffectLayer] = field(default_factory=dict)  # fixture layer
+    health: HealthConfig = field(default_factory=HealthConfig)
 
 
 def _color(table: dict, key: str, where: str):
@@ -310,10 +334,52 @@ def parse_config(raw: dict, base_dir: Path) -> Config:
     config = Config(
         general, tuple(bulbs), tuple(teams), effect,
         WebConfig(enabled, host, port, cooldown, final_hold, practice, mark_window),
-        fixture_effects,
+        fixture_effects, _parse_health(raw.get("health", {})),
     )
     _check_effects(config)
     return config
+
+
+def _text(h: dict, key: str, default: str | None = None) -> str | None:
+    value = h.get(key, default)
+    if value in (None, ""):
+        return default
+    if not isinstance(value, str):
+        raise ConfigError(f"health.{key}: must be text")
+    return value.strip()
+
+
+def _http_url(h: dict, key: str) -> str | None:
+    url = _text(h, key)
+    if url is not None and not url.startswith(("http://", "https://")):
+        raise ConfigError(f"health.{key}: must start with http:// or https://")
+    return url
+
+
+def _parse_health(h: dict) -> HealthConfig:
+    notify = _text(h, "notify", "none")
+    if notify not in NOTIFY_KINDS:
+        raise ConfigError(f"health.notify: must be one of {', '.join(NOTIFY_KINDS)}")
+    port = h.get("smtp_port", 587)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ConfigError("health.smtp_port: must be an integer 1-65535")
+    health = HealthConfig(
+        heartbeat_url=_http_url(h, "heartbeat_url"),
+        heartbeat_interval_s=_num(h, "heartbeat_interval_s", 300, "health", MIN_HEARTBEAT_S),
+        name=_text(h, "name", "Gameday Lights"),
+        notify=notify,
+        webhook_url=_http_url(h, "webhook_url"),
+        smtp_host=_text(h, "smtp_host"), smtp_port=port, smtp_user=_text(h, "smtp_user"),
+        smtp_password=_text(h, "smtp_password"),
+        smtp_from=_text(h, "smtp_from"), smtp_to=_text(h, "smtp_to"),
+        fail_after_min=_num(h, "fail_after_min", 5, "health", 1),
+        renotify_min=_num(h, "renotify_min", 120, "health", 10),
+    )
+    needs = {"webhook": ("webhook_url",), "smtp": ("smtp_host", "smtp_from", "smtp_to")}
+    for key in needs.get(notify, ()):
+        if not getattr(health, key):
+            raise ConfigError(f"health.{key}: required when notify = \"{notify}\"")
+    return health
 
 
 def _check_effects(config: Config) -> None:

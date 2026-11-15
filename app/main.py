@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import Coroutine
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app.bulbs.base import BulbAdapter, DryRunBulb, capabilities_for
 from app.bulbs.govee import GoveeBulb, discover_govee
@@ -34,11 +35,14 @@ from app.effects import DEFAULT_COLORS
 from app.espn.client import EspnClient, EspnError
 from app.espn.replay import ReplayClient
 from app.espn.schedule import parse_team_colors
+from app.health import run_heartbeat
+from app.notify import HealthMonitor
 from app.settings import machine_raw_from_config
 from app.settings_service import SettingsService
 from app.store import Store
 from app.watcher import Watcher
-from app.web.status import create_app, serve_status
+from app.web.routes_diagnostics import app_version
+from app.web.status import BulbPings, create_app, serve_status
 
 log = logging.getLogger("gameday-lights")
 
@@ -167,7 +171,9 @@ def make_live_apply(watcher, dispatcher, colors: dict, client, dry: bool, tasks:
     return apply
 
 
-async def run_live(service: SettingsService, store: Store, dry_run: bool) -> None:
+async def run_live(
+    service: SettingsService, store: Store, dry_run: bool, config_path: Path | None = None
+) -> None:
     cfg = service.config
     dry = dry_run or not cfg.general.dispatch_enabled
     log.info("starting: %d team(s), %d bulb(s), %s", len(cfg.teams), len(cfg.bulbs),
@@ -185,12 +191,18 @@ async def run_live(service: SettingsService, store: Store, dry_run: bool) -> Non
         watcher = Watcher(current, store, client, dispatcher, utc_now)
         service.subscribe(make_live_apply(watcher, dispatcher, colors, client, dry, background))
         tasks = [asyncio.ensure_future(watcher.run())]
+        if cfg.health.heartbeat_url:
+            tasks.append(asyncio.ensure_future(run_heartbeat(current)))
+        monitor = HealthMonitor(current, watcher.stats, BulbPings(lambda: dispatcher.bulbs).get,
+                                utc_now)
+        tasks.append(asyncio.ensure_future(monitor.run()))
         if cfg.web.enabled:
             app = create_app(store, current, watcher.stats, lambda: dispatcher.bulbs, dry,
                              dispatcher=dispatcher, pulse_pattern=make_bulb_pulse(current, colors),
                              settings=service, espn=client, discover_bulbs=discover_all,
                              team_test=make_team_test(current, colors),
-                             cell_pattern=make_cell_pattern(current, colors), practice=watcher)
+                             cell_pattern=make_cell_pattern(current, colors), practice=watcher,
+                             config_path=config_path)
             tasks.append(asyncio.ensure_future(serve_status(app, cfg.web.host, cfg.web.port)))
         await run_tasks(tasks)
     finally:
@@ -336,6 +348,7 @@ def config_command(args: argparse.Namespace, service: SettingsService) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gameday-lights", description=__doc__)
     p.add_argument("--config", default="config.toml")
+    p.add_argument("--version", action="version", version=f"gameday-lights {app_version()}")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="watch games and fire effects")
@@ -380,7 +393,8 @@ def main(argv: list[str] | None = None) -> int:
         service, store = open_settings(args.config)
         try:
             if args.command == "run":
-                run_until_signal(run_live(service, store, args.dry_run))
+                run_until_signal(
+                    run_live(service, store, args.dry_run, Path(args.config).resolve()))
                 return 0
             if args.command == "config":
                 return config_command(args, service)

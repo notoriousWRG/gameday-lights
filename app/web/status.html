@@ -22,6 +22,7 @@
     <a id="tab-calibrate" href="#/calibrate">Calibrate</a>
     <a id="tab-settings" href="#/settings">Settings</a>
     <a id="tab-advanced" href="#/advanced">Advanced</a>
+    <a id="tab-diagnostics" href="#/diagnostics">Diagnostics</a>
   </nav>
   <div id="view-status">
   <section class="card" id="setup-card" hidden>
@@ -146,6 +147,14 @@
     <p class="muted help"><a href="#/advanced">Advanced timings</a></p>
   </div>
 
+  <div id="view-diagnostics" hidden>
+    <section class="card">
+      <h2>Diagnostics</h2>
+      <p class="muted help">Something not working? Press the button and paste the text into a message to whoever set this up. It contains no passwords.</p>
+      <div id="diagnostics-body"></div>
+    </section>
+  </div>
+
   <div id="view-advanced" hidden>
     <div id="advanced-banner"></div>
     <section class="card">
@@ -157,6 +166,7 @@
 </main>
 <script src="static/app.js"></script>
 <script src="static/screens.js"></script>
+<script src="static/diagnostics.js"></script>
 <script src="static/nav.js"></script>
 </body>
 </html>

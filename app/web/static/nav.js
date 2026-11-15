@@ -8,6 +8,7 @@ const ROUTES = {
   "#/bulbs": {view: "view-bulbs", tab: "tab-bulbs", show: () => edShow(BULBS)},
   "#/calibrate": {view: "view-calibrate", tab: "tab-calibrate", show: calLoad},
   "#/settings": {view: "view-settings", tab: "tab-settings", show: () => edShow(SETTINGS)},
+  "#/diagnostics": {view: "view-diagnostics", tab: "tab-diagnostics", show: diagLoad},
   "#/advanced": {view: "view-advanced", tab: "tab-advanced", show: () => edShow(ADVANCED)},
 };
 function showView() {

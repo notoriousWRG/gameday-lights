@@ -137,4 +137,6 @@
            color: var(--accent); background: transparent; border: 1px solid var(--accent); }
   button:hover:not(:disabled) { background: var(--accent); color: var(--card); }
   button:disabled { opacity: .55; cursor: default; }
+  textarea { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, monospace; color: var(--ink);
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 6px 0; }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
