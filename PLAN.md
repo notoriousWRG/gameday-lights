@@ -39,7 +39,7 @@ Each group ends with a review stop. Cards live in `cards/NN-<slug>.md`.
 - [x] **G28 Portable runtime** (built 2026-11-15, awaiting review): C94 per-OS data dir; C95 `init` and `doctor`
 - [ ] **G29 Installers**: C96 macOS/Linux bootstrap (launchd, systemd --user) built 2026-11-15, awaiting the Mac mini test (needs C101's release wheel, or `GAMEDAY_WHEEL`); C97 Windows bootstrap (Task Scheduler); C98 `update` command; C99 opt-in update-available note
 - [ ] **G30 CI and releases**: C100 CI matrix (ubuntu/macos/windows); C101 tagged release workflow and `docs/releasing.md` (built 2026-11-15, untested on GitHub; needs a push and a tag)
-- [ ] **G31 Docs site** (replaces G21/C72): C102 MkDocs + Pages deploy; C103 install/setup/updating/troubleshooting pages; C104 sync README, ARCHITECTURE, DECISIONS, intent
+- [ ] **G31 Docs site** (replaces G21/C72): C102 MkDocs + Pages deploy (built 2026-11-15, Pages not yet switched on); C103 install/setup/updating/troubleshooting pages (Mac-only so far: install-mac, first-setup, updating, troubleshooting; Windows and Linux pages wait for C97 and a Linux test); C104 sync README, ARCHITECTURE, DECISIONS, intent
 
 ## Phase 1 gate
 `systemctl --user enable --now gameday-lights`; a full Packers game runs unattended with correct fires, recorded detected->fired times, and nothing replayed after a deliberate mid-game restart.

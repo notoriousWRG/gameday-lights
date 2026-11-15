@@ -1,0 +1,39 @@
+site_name: Gameday Lights
+site_description: Your team scores and the room lights up. Setup guides for Gameday Lights.
+site_url: https://notoriouswrg.github.io/gameday-lights/
+repo_url: https://github.com/notoriousWRG/gameday-lights
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/weather-night, name: Switch to dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/weather-sunny, name: Switch to light mode}
+  features:
+    - navigation.sections
+    - content.code.copy
+    - search.suggest
+
+# Maintainer notes, not for the people running the app.
+exclude_docs: |
+  releasing.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc: {permalink: true}
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Install:
+      - Mac: install-mac.md
+  - Set it up: first-setup.md
+  - Game day: game-day.md
+  - Keeping it up to date: updating.md
+  - When something is wrong: troubleshooting.md

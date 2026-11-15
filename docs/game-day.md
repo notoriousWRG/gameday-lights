@@ -10,4 +10,4 @@
 An unmarked score or play loses its button after `[web] mark_window_min` (default 5) minutes, and as soon as you mark a later one: a reading that late says little about the delay, and the server refuses it. Marked rows stay (so you can undo one) until they are 12 hours old. Readings keep counting toward the suggestions. Plays are deleted after 7 days.
 
 ## Caveat
-Play detection was built against a hand-made scoreboard, not a recording of a live game. Until card 84 is done, treat "no plays appear" as something to report, not a fault in your setup.
+Play detection was built and tested against a hand-made scoreboard, not a recording of a live game. Until it has been checked against one, treat "no plays appear" as something to report, not a fault in your setup.

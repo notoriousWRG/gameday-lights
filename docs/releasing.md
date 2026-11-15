@@ -34,6 +34,12 @@ For the person publishing Gameday Lights, not for the people running it. Five st
 
     Check the web page opens and Diagnostics shows the new version.
 
+## Docs to update at the first real release
+
+When `v0.1.0` (not a pre-release) is published, remove the **Pre-release** warning and the
+collapsed *Pre-release install* block from `docs/install-mac.md`. Until then the normal
+`releases/latest/...` line has nothing to download.
+
 ## What the workflow checks
 
 It stops, publishing nothing, if the tag differs from the `pyproject.toml` version, if lint or

@@ -11,3 +11,6 @@ config.toml
 *.db
 *.db-journal
 probe_out/
+
+# built docs
+site/
